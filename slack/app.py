@@ -21,6 +21,13 @@ def handle_slash_command(
 ) -> None:
     """Acknowledge Slack immediately, then route the command text."""
     ack()
+    LOGGER.info(
+        "Received Slack command command=%r text=%r user_id=%r channel_id=%r",
+        command.get("command"),
+        command.get("text", ""),
+        command.get("user_id"),
+        command.get("channel_id"),
+    )
     respond(router.dispatch(str(command.get("text", ""))))
 
 
@@ -45,4 +52,3 @@ def run() -> None:
     )
     LOGGER.info("Starting Slack listener for %s", settings.slash_command)
     SocketModeHandler(create_app(settings), settings.app_token).start()
-
