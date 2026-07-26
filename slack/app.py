@@ -9,6 +9,12 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from slack.commands import CommandRouter, build_router
 from slack.config import Settings
+from upstox.client import UpstoxAuthClient
+from upstox.config import UpstoxSettings
+from upstox.scheduler import TokenRequestScheduler
+from upstox.service import TokenRotationService
+from upstox.store import TokenStore
+from upstox.webhook import UpstoxWebhookServer
 
 LOGGER = logging.getLogger(__name__)
 
@@ -44,11 +50,36 @@ def create_app(settings: Settings, router: CommandRouter | None = None) -> App:
 
 
 def run() -> None:
-    """Start the blocking Socket Mode connection."""
+    """Start token rotation, the webhook, and the blocking Socket Mode listener."""
     settings = Settings.from_env()
+    upstox_settings = UpstoxSettings.from_env()
     logging.basicConfig(
         level=settings.log_level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    token_store = TokenStore(upstox_settings.token_file)
+    auth_client = UpstoxAuthClient(upstox_settings)
+    token_service = TokenRotationService(
+        upstox_settings, token_store, auth_client
+    )
+    scheduler = TokenRequestScheduler(upstox_settings, token_service)
+    webhook = UpstoxWebhookServer(upstox_settings, token_service)
+
     LOGGER.info("Starting Slack listener for %s", settings.slash_command)
-    SocketModeHandler(create_app(settings), settings.app_token).start()
+    if upstox_settings.credential_errors:
+        LOGGER.error(
+            "Upstox token rotation is not configured: %s",
+            "; ".join(upstox_settings.credential_errors),
+        )
+
+    webhook.start()
+    scheduler.start()
+    try:
+        SocketModeHandler(
+            create_app(settings, build_router(token_service)),
+            settings.app_token,
+        ).start()
+    finally:
+        scheduler.stop()
+        webhook.stop()

@@ -1,6 +1,15 @@
 from slack.commands import CommandRouter, build_router, ephemeral
 
 
+class FakeAuthService:
+    def status_message(self) -> str:
+        return "Upstox approval is pending."
+
+    def request_token_message(self, force: bool = True) -> str:
+        assert force is True
+        return "Upstox approval requested."
+
+
 def test_empty_command_shows_help() -> None:
     response = build_router().dispatch("")
 
@@ -22,6 +31,20 @@ def test_any_whitespace_can_separate_command_and_arguments() -> None:
 
 def test_status_command_reports_running() -> None:
     assert "running" in build_router().dispatch("status")["text"]
+
+
+def test_status_and_auth_commands_include_upstox_state() -> None:
+    router = build_router(FakeAuthService())
+
+    assert "approval is pending" in router.dispatch("status")["text"]
+    assert "approval is pending" in router.dispatch("auth status")["text"]
+    assert "approval requested" in router.dispatch("auth request")["text"]
+
+
+def test_auth_command_rejects_unknown_action() -> None:
+    response = build_router(FakeAuthService()).dispatch("auth rotate")
+
+    assert "Unknown auth action" in response["text"]
 
 
 def test_unknown_command_suggests_help() -> None:

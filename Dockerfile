@@ -11,6 +11,7 @@ RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY main.py ./
 COPY slack ./slack
+COPY upstox ./upstox
 
 RUN groupadd --gid 10001 swingengine \
     && useradd --uid 10001 --gid swingengine --no-create-home swingengine \
