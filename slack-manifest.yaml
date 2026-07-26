@@ -14,12 +14,13 @@ features:
   slash_commands:
     - command: /swingengine
       description: Send a command to SwingEngine
-      usage_hint: help | ping | status
+      usage_hint: help | ping | status | auth status | auth set <token>
       should_escape: false
 
 oauth_config:
   scopes:
     bot:
+      - chat:write
       - commands
 
 settings:

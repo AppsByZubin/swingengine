@@ -12,8 +12,8 @@ class TokenAuthService(Protocol):
     def status_message(self) -> str:
         """Return a credential-free description of Upstox auth state."""
 
-    def request_token_message(self, force: bool = True) -> str:
-        """Request a new user-approved token and describe the result."""
+    def set_token_message(self, access_token: str) -> str:
+        """Validate, persist, and describe a manually supplied token."""
 
 
 def ephemeral(text: str) -> SlackResponse:
@@ -23,12 +23,16 @@ def ephemeral(text: str) -> SlackResponse:
 
 def help_command(_: str = "") -> SlackResponse:
     return ephemeral(
-        "*SwingEngine commands*\n"
-        "• `/swingengine help` — show this help\n"
+        "*SwingEngine commands*\n\n"
+        "• `/swingengine` or `/swingengine help` — show this help\n"
         "• `/swingengine ping` — test the Slack connection\n"
         "• `/swingengine status` — check service and Upstox authorization\n"
-        "• `/swingengine auth status` — check Upstox authorization\n"
-        "• `/swingengine auth request` — request Upstox approval now"
+        "• `/swingengine auth` or `/swingengine auth status` — check the "
+        "stored Upstox token\n"
+        "• `/swingengine auth set <token>` — validate and store a new token\n\n"
+        "*Disabled workflow*\n"
+        "• `/swingengine auth request` — unavailable until the Upstox "
+        "notifier webhook is enabled"
     )
 
 
@@ -49,16 +53,26 @@ def auth_command(
     arguments: str = "", auth_service: TokenAuthService | None = None
 ) -> SlackResponse:
     if auth_service is None:
-        return ephemeral("Upstox token rotation is not configured.")
+        return ephemeral("Upstox token management is not configured.")
 
-    action = arguments.strip().casefold() or "status"
+    parts = arguments.strip().split(maxsplit=1)
+    action = parts[0].casefold() if parts else "status"
     if action == "status":
         return ephemeral(auth_service.status_message())
+    if action == "set":
+        if len(parts) != 2:
+            return ephemeral(
+                "Provide the token: `/swingengine auth set <token>`."
+            )
+        return ephemeral(auth_service.set_token_message(parts[1]))
     if action == "request":
-        return ephemeral(auth_service.request_token_message(force=True))
+        return ephemeral(
+            "Semi-automated token requests are disabled. Generate a token in "
+            "Upstox, then use `/swingengine auth set <token>`."
+        )
     return ephemeral(
         "Unknown auth action. Use `/swingengine auth status` or "
-        "`/swingengine auth request`."
+        "`/swingengine auth set <token>`."
     )
 
 

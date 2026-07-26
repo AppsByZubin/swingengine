@@ -30,6 +30,8 @@ class TokenState:
     expires_at: int | None = None
     last_request_date: str = ""
     authorization_expiry: int | None = None
+    validation_status: str = "unchecked"
+    last_verified_at: int | None = None
     updated_at: str = ""
 
     @classmethod
@@ -42,8 +44,15 @@ class TokenState:
                 raise ValueError(f"{name} must be an integer")
             return int(value)
 
+        access_token = str(raw.get("access_token", ""))
+        validation_status = str(raw.get("validation_status", "")).strip()
+        if not validation_status:
+            # State written by the earlier webhook implementation was already
+            # verified before persistence.
+            validation_status = "valid" if access_token else "unchecked"
+
         return cls(
-            access_token=str(raw.get("access_token", "")),
+            access_token=access_token,
             client_id=str(raw.get("client_id", "")),
             user_id=str(raw.get("user_id", "")),
             token_type=str(raw.get("token_type", "")),
@@ -51,6 +60,8 @@ class TokenState:
             expires_at=optional_int("expires_at"),
             last_request_date=str(raw.get("last_request_date", "")),
             authorization_expiry=optional_int("authorization_expiry"),
+            validation_status=validation_status,
+            last_verified_at=optional_int("last_verified_at"),
             updated_at=str(raw.get("updated_at", "")),
         )
 
@@ -58,8 +69,11 @@ class TokenState:
         current = now or datetime.now(UTC)
         return bool(
             self.access_token
-            and self.expires_at is not None
-            and self.expires_at > int(current.timestamp() * 1000)
+            and self.validation_status == "valid"
+            and (
+                self.expires_at is None
+                or self.expires_at > int(current.timestamp() * 1000)
+            )
         )
 
 
@@ -105,8 +119,9 @@ class TokenStore:
         client_id: str,
         user_id: str,
         token_type: str,
-        issued_at: int,
-        expires_at: int,
+        issued_at: int | None,
+        expires_at: int | None,
+        verified_at: int | None = None,
     ) -> TokenState:
         with self._lock:
             current = self.load()
@@ -118,6 +133,29 @@ class TokenStore:
                 token_type=token_type,
                 issued_at=issued_at,
                 expires_at=expires_at,
+                validation_status="valid",
+                last_verified_at=verified_at,
+                updated_at=datetime.now(UTC).isoformat(),
+            )
+            self._write(updated)
+            return updated
+
+    def record_validation(
+        self,
+        *,
+        valid: bool,
+        verified_at: int,
+        expires_at: int | None = None,
+    ) -> TokenState:
+        with self._lock:
+            current = self.load()
+            updated = replace(
+                current,
+                expires_at=expires_at
+                if expires_at is not None
+                else current.expires_at,
+                validation_status="valid" if valid else "invalid",
+                last_verified_at=verified_at,
                 updated_at=datetime.now(UTC).isoformat(),
             )
             self._write(updated)
@@ -151,4 +189,3 @@ class TokenStore:
                     temporary_path.unlink(missing_ok=True)
                 except OSError:
                     pass
-

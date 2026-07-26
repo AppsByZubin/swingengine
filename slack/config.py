@@ -15,6 +15,7 @@ class Settings:
     app_token: str
     slash_command: str = "/swingengine"
     log_level: str = "INFO"
+    alert_user_id: str = ""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Settings":
@@ -23,6 +24,7 @@ class Settings:
         app_token = values.get("SLACK_APP_TOKEN", "").strip()
         slash_command = values.get("SLACK_COMMAND", "/swingengine").strip()
         log_level = values.get("LOG_LEVEL", "INFO").strip().upper()
+        alert_user_id = values.get("SLACK_ALERT_USER_ID", "").strip()
 
         errors: list[str] = []
         if not bot_token:
@@ -48,4 +50,5 @@ class Settings:
             app_token=app_token,
             slash_command=slash_command,
             log_level=log_level,
+            alert_user_id=alert_user_id,
         )

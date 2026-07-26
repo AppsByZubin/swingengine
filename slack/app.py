@@ -9,8 +9,10 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from slack.commands import CommandRouter, build_router
 from slack.config import Settings
+from slack.notifier import SlackTokenNotifier
 from upstox.client import UpstoxAuthClient
 from upstox.config import UpstoxSettings
+from upstox.monitor import TokenHealthMonitor
 from upstox.scheduler import TokenRequestScheduler
 from upstox.service import TokenRotationService
 from upstox.store import TokenStore
@@ -24,17 +26,46 @@ def handle_slash_command(
     respond: Callable[[Mapping[str, Any]], Any],
     command: Mapping[str, Any],
     router: CommandRouter,
+    authorized_user_id: str = "",
 ) -> None:
     """Acknowledge Slack immediately, then route the command text."""
     ack()
+    command_text = str(command.get("text", ""))
     LOGGER.info(
         "Received Slack command command=%r text=%r user_id=%r channel_id=%r",
         command.get("command"),
-        command.get("text", ""),
+        _redact_sensitive_command(command_text),
         command.get("user_id"),
         command.get("channel_id"),
     )
-    respond(router.dispatch(str(command.get("text", ""))))
+    if (
+        _is_auth_set(command_text)
+        and authorized_user_id
+        and command.get("user_id") != authorized_user_id
+    ):
+        respond(
+            {
+                "response_type": "ephemeral",
+                "text": "You are not authorized to replace the Upstox token.",
+            }
+        )
+        return
+    respond(router.dispatch(command_text))
+
+
+def _redact_sensitive_command(text: str) -> str:
+    if _is_auth_set(text):
+        return "auth set [REDACTED]"
+    return text
+
+
+def _is_auth_set(text: str) -> bool:
+    parts = text.split(maxsplit=2)
+    return (
+        len(parts) >= 2
+        and parts[0].casefold() == "auth"
+        and parts[1].casefold() == "set"
+    )
 
 
 def create_app(settings: Settings, router: CommandRouter | None = None) -> App:
@@ -43,14 +74,20 @@ def create_app(settings: Settings, router: CommandRouter | None = None) -> App:
     command_router = router or build_router()
 
     def listener(ack: Callable[[], Any], respond: Any, command: Any) -> None:
-        handle_slash_command(ack, respond, command, command_router)
+        handle_slash_command(
+            ack,
+            respond,
+            command,
+            command_router,
+            settings.alert_user_id,
+        )
 
     slack_app.command(settings.slash_command)(listener)
     return slack_app
 
 
 def run() -> None:
-    """Start token rotation, the webhook, and the blocking Socket Mode listener."""
+    """Start token services and the blocking Socket Mode listener."""
     settings = Settings.from_env()
     upstox_settings = UpstoxSettings.from_env()
     logging.basicConfig(
@@ -63,23 +100,32 @@ def run() -> None:
     token_service = TokenRotationService(
         upstox_settings, token_store, auth_client
     )
+    slack_app = create_app(settings, build_router(token_service))
+    notifier = SlackTokenNotifier(
+        slack_app.client,
+        settings.alert_user_id,
+    )
+    monitor = TokenHealthMonitor(
+        upstox_settings,
+        token_service,
+        notifier.notify,
+    )
     scheduler = TokenRequestScheduler(upstox_settings, token_service)
     webhook = UpstoxWebhookServer(upstox_settings, token_service)
 
     LOGGER.info("Starting Slack listener for %s", settings.slash_command)
     if upstox_settings.credential_errors:
         LOGGER.error(
-            "Upstox token rotation is not configured: %s",
+            "Upstox token management is not configured: %s",
             "; ".join(upstox_settings.credential_errors),
         )
 
     webhook.start()
     scheduler.start()
+    monitor.start()
     try:
-        SocketModeHandler(
-            create_app(settings, build_router(token_service)),
-            settings.app_token,
-        ).start()
+        SocketModeHandler(slack_app, settings.app_token).start()
     finally:
+        monitor.stop()
         scheduler.stop()
         webhook.stop()

@@ -13,6 +13,10 @@ from upstox.config import UpstoxSettings
 class UpstoxAPIError(RuntimeError):
     """Raised for a sanitized Upstox API failure."""
 
+    def __init__(self, message: str, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+
 
 @dataclass(frozen=True)
 class TokenRequest:
@@ -53,7 +57,8 @@ class UpstoxAuthClient:
 
         if response.status_code != 200:
             raise UpstoxAPIError(
-                f"Upstox token request returned HTTP {response.status_code}"
+                f"Upstox token request returned HTTP {response.status_code}",
+                response.status_code,
             )
 
         payload = self._json_object(response, "token request")
@@ -89,7 +94,8 @@ class UpstoxAuthClient:
 
         if response.status_code != 200:
             raise UpstoxAPIError(
-                f"Upstox token verification returned HTTP {response.status_code}"
+                f"Upstox token verification returned HTTP {response.status_code}",
+                response.status_code,
             )
         payload = self._json_object(response, "token verification")
         data: Any = payload.get("data")
@@ -117,4 +123,3 @@ class UpstoxAuthClient:
                 f"Upstox {operation} returned a non-object response"
             )
         return payload
-

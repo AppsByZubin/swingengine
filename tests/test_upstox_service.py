@@ -145,7 +145,11 @@ def test_webhook_rejects_token_that_upstox_cannot_verify(tmp_path) -> None:
 
 
 def test_disabled_service_reports_disabled(tmp_path) -> None:
-    settings = replace(enabled_settings(tmp_path), enabled=False)
+    settings = replace(
+        enabled_settings(tmp_path),
+        enabled=False,
+        rotation_enabled=False,
+    )
     client = FakeAuthClient(0)
     service = TokenRotationService(
         settings,
@@ -156,3 +160,71 @@ def test_disabled_service_reports_disabled(tmp_path) -> None:
     assert "disabled" in service.status_message()
     assert not service.request_token().ok
 
+
+def manual_settings(tmp_path) -> UpstoxSettings:
+    return UpstoxSettings.from_env(
+        {
+            "UPSTOX_TOKEN_MANAGEMENT_ENABLED": "true",
+            "UPSTOX_TOKEN_MONITOR_ENABLED": "true",
+            "UPSTOX_EXPECTED_USER_ID": "USER1",
+            "UPSTOX_TOKEN_FILE": str(tmp_path / "token.json"),
+        }
+    )
+
+
+def test_manual_token_is_verified_and_persisted(tmp_path) -> None:
+    now = datetime(2026, 7, 27, 4, 0, tzinfo=UTC)
+    settings = manual_settings(tmp_path)
+    client = FakeAuthClient(0)
+    store = TokenStore(settings.token_file)
+    service = TokenRotationService(
+        settings, store, client  # type: ignore[arg-type]
+    )
+
+    result = service.set_token("manual-token", now=now)
+
+    assert result.ok
+    assert client.verified_tokens == ["manual-token"]
+    state = store.load()
+    assert state.access_token == "manual-token"
+    assert state.validation_status == "valid"
+    assert state.last_verified_at == int(now.timestamp() * 1000)
+
+
+def test_manual_token_is_not_saved_when_upstox_rejects_it(tmp_path) -> None:
+    settings = manual_settings(tmp_path)
+    client = FakeAuthClient(0)
+    client.verification_error = UpstoxAPIError(
+        "verification returned 401", status_code=401
+    )
+    store = TokenStore(settings.token_file)
+    service = TokenRotationService(
+        settings, store, client  # type: ignore[arg-type]
+    )
+
+    result = service.set_token("bad-token")
+
+    assert not result.ok
+    assert not store.load().access_token
+
+
+def test_health_check_marks_rejected_stored_token_invalid(tmp_path) -> None:
+    now = datetime(2026, 7, 27, 4, 0, tzinfo=UTC)
+    settings = manual_settings(tmp_path)
+    client = FakeAuthClient(0)
+    store = TokenStore(settings.token_file)
+    service = TokenRotationService(
+        settings, store, client  # type: ignore[arg-type]
+    )
+    assert service.set_token("manual-token", now=now).ok
+    client.verification_error = UpstoxAPIError(
+        "verification returned 401", status_code=401
+    )
+
+    result = service.validate_current_token(
+        now=now + timedelta(hours=3)
+    )
+
+    assert not result.ok
+    assert result.status_code == 401
+    assert store.load().validation_status == "invalid"

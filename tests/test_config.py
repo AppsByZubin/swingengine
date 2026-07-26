@@ -10,11 +10,13 @@ def test_settings_load_valid_environment() -> None:
             "SLACK_APP_TOKEN": "xapp-test",
             "SLACK_COMMAND": "/swing",
             "LOG_LEVEL": "debug",
+            "SLACK_ALERT_USER_ID": "U123",
         }
     )
 
     assert settings.slash_command == "/swing"
     assert settings.log_level == "DEBUG"
+    assert settings.alert_user_id == "U123"
 
 
 def test_settings_report_all_missing_tokens() -> None:

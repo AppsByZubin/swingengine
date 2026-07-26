@@ -5,9 +5,9 @@ class FakeAuthService:
     def status_message(self) -> str:
         return "Upstox approval is pending."
 
-    def request_token_message(self, force: bool = True) -> str:
-        assert force is True
-        return "Upstox approval requested."
+    def set_token_message(self, access_token: str) -> str:
+        assert access_token == "new-token"
+        return "Upstox token stored."
 
 
 def test_empty_command_shows_help() -> None:
@@ -15,6 +15,22 @@ def test_empty_command_shows_help() -> None:
 
     assert response["response_type"] == "ephemeral"
     assert "/swingengine help" in response["text"]
+
+
+def test_help_lists_every_supported_command_and_disabled_workflow() -> None:
+    text = build_router().dispatch("help")["text"]
+
+    expected_entries = (
+        "• `/swingengine` or `/swingengine help`",
+        "• `/swingengine ping`",
+        "• `/swingengine status`",
+        "• `/swingengine auth` or `/swingengine auth status`",
+        "• `/swingengine auth set <token>`",
+        "• `/swingengine auth request`",
+    )
+    for entry in expected_entries:
+        assert entry in text
+    assert "Disabled workflow" in text
 
 
 def test_command_names_are_case_insensitive() -> None:
@@ -38,7 +54,20 @@ def test_status_and_auth_commands_include_upstox_state() -> None:
 
     assert "approval is pending" in router.dispatch("status")["text"]
     assert "approval is pending" in router.dispatch("auth status")["text"]
-    assert "approval requested" in router.dispatch("auth request")["text"]
+    assert "token stored" in router.dispatch("auth set new-token")["text"]
+
+
+def test_auth_set_requires_a_token() -> None:
+    response = build_router(FakeAuthService()).dispatch("auth set")
+
+    assert "Provide the token" in response["text"]
+
+
+def test_auth_request_explains_manual_workflow() -> None:
+    response = build_router(FakeAuthService()).dispatch("auth request")
+
+    assert "disabled" in response["text"]
+    assert "auth set" in response["text"]
 
 
 def test_auth_command_rejects_unknown_action() -> None:

@@ -1,7 +1,10 @@
 """Token-rotation orchestration and webhook payload validation."""
 
+import base64
+import binascii
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import json
 import logging
 from threading import Lock
 from typing import Any
@@ -37,9 +40,9 @@ class TokenRotationService:
 
     def status_message(self, now: datetime | None = None) -> str:
         if not self.settings.enabled:
-            return "Upstox token rotation is disabled."
+            return "Upstox token management is disabled."
         if self.settings.credential_errors:
-            return "Upstox token rotation is misconfigured: " + "; ".join(
+            return "Upstox token management is misconfigured: " + "; ".join(
                 self.settings.credential_errors
             )
 
@@ -51,20 +54,147 @@ class TokenRotationService:
 
         local_timezone = ZoneInfo(self.settings.timezone_name)
         if state.is_valid(current):
-            expiry = datetime.fromtimestamp(
-                state.expires_at / 1000, tz=UTC
-            ).astimezone(local_timezone)
+            message = "Upstox trading token is valid"
+            if state.expires_at is not None:
+                expiry = datetime.fromtimestamp(
+                    state.expires_at / 1000, tz=UTC
+                ).astimezone(local_timezone)
+                message += f" until {expiry:%Y-%m-%d %H:%M:%S %Z}"
+            if state.last_verified_at is not None:
+                verified = datetime.fromtimestamp(
+                    state.last_verified_at / 1000, tz=UTC
+                ).astimezone(local_timezone)
+                message += f"; last checked {verified:%Y-%m-%d %H:%M:%S %Z}"
+            return message + "."
+
+        if state.validation_status == "invalid":
             return (
-                "Upstox trading token is valid until "
-                f"{expiry:%Y-%m-%d %H:%M:%S %Z}."
+                "Upstox trading token is invalid. Use "
+                "`/swingengine auth set <token>`."
+            )
+        if state.access_token:
+            return (
+                "Upstox trading token is expired or unchecked. Use "
+                "`/swingengine auth set <token>`."
+            )
+        return (
+            "No Upstox trading token is stored. Use "
+            "`/swingengine auth set <token>`."
+        )
+
+    def set_token_message(self, access_token: str) -> str:
+        return self.set_token(access_token).message
+
+    def set_token(
+        self,
+        access_token: str,
+        *,
+        now: datetime | None = None,
+    ) -> OperationResult:
+        if not self.settings.enabled:
+            return OperationResult(False, "Upstox token management is disabled.", 503)
+        if self.settings.credential_errors:
+            return OperationResult(
+                False,
+                "Upstox token management is misconfigured: "
+                + "; ".join(self.settings.credential_errors),
+                503,
             )
 
-        today = current.astimezone(local_timezone).date().isoformat()
-        if state.last_request_date == today:
-            return "Upstox token approval is pending for today's request."
-        if state.access_token:
-            return "Upstox trading token is expired; a new request is required."
-        return "Upstox trading token has not been authorized."
+        token = access_token.strip()
+        if not token or any(char.isspace() for char in token):
+            return OperationResult(False, "Provide one non-empty access token.", 400)
+        if len(token) > 16_384:
+            return OperationResult(False, "Access token is too large.", 413)
+
+        current = now or datetime.now(UTC)
+        current_milliseconds = int(current.timestamp() * 1000)
+        try:
+            self.client.verify_access_token(token)
+            issued_at, expires_at = _jwt_timestamps(token)
+            if expires_at is not None and expires_at <= current_milliseconds:
+                return OperationResult(False, "Upstox token is already expired.", 400)
+            self.store.record_token(
+                access_token=token,
+                client_id=self.settings.api_key,
+                user_id=self.settings.expected_user_id,
+                token_type="Bearer",
+                issued_at=issued_at or current_milliseconds,
+                expires_at=expires_at,
+                verified_at=current_milliseconds,
+            )
+        except UpstoxAPIError as error:
+            LOGGER.warning("Rejected a manually supplied Upstox token: %s", error)
+            return OperationResult(False, "Upstox rejected the supplied token.", 400)
+        except TokenStateError as error:
+            LOGGER.error("Could not persist the supplied Upstox token: %s", error)
+            return OperationResult(False, "Could not persist access token.", 500)
+
+        LOGGER.info("Validated and stored a manually supplied Upstox token")
+        return OperationResult(True, self.status_message(current))
+
+    def validate_current_token(
+        self, *, now: datetime | None = None
+    ) -> OperationResult:
+        if not self.settings.enabled:
+            return OperationResult(False, "Upstox token management is disabled.", 503)
+        if self.settings.credential_errors:
+            return OperationResult(
+                False,
+                "Upstox token management is misconfigured: "
+                + "; ".join(self.settings.credential_errors),
+                503,
+            )
+
+        current = now or datetime.now(UTC)
+        checked_at = int(current.timestamp() * 1000)
+        try:
+            state = self.store.load()
+        except TokenStateError:
+            return OperationResult(False, "Upstox token state cannot be read.", 500)
+        if not state.access_token:
+            return OperationResult(
+                False,
+                "No Upstox token is stored. Use "
+                "`/swingengine auth set <token>`.",
+                404,
+            )
+
+        try:
+            self.client.verify_access_token(state.access_token)
+            _, expires_at = _jwt_timestamps(state.access_token)
+            self.store.record_validation(
+                valid=True,
+                verified_at=checked_at,
+                expires_at=expires_at,
+            )
+        except UpstoxAPIError as error:
+            if error.status_code in {401, 403}:
+                try:
+                    self.store.record_validation(
+                        valid=False,
+                        verified_at=checked_at,
+                    )
+                except TokenStateError:
+                    pass
+                return OperationResult(
+                    False,
+                    "Upstox rejected the stored token. Use "
+                    "`/swingengine auth set <token>`.",
+                    401,
+                )
+            return OperationResult(
+                False,
+                "SwingEngine could not verify the Upstox token; Upstox "
+                "may be temporarily unavailable.",
+                502,
+            )
+        except TokenStateError:
+            return OperationResult(
+                False, "Could not update Upstox token state.", 500
+            )
+
+        return OperationResult(True, self.status_message(current))
 
     def request_token_message(self, force: bool = True) -> str:
         return self.request_token(force=force).message
@@ -75,7 +205,7 @@ class TokenRotationService:
         force: bool = False,
         now: datetime | None = None,
     ) -> OperationResult:
-        if not self.settings.enabled:
+        if not self.settings.rotation_enabled:
             return OperationResult(False, "Upstox token rotation is disabled.", 503)
         if self.settings.credential_errors:
             return OperationResult(
@@ -127,7 +257,7 @@ class TokenRotationService:
         *,
         now: datetime | None = None,
     ) -> OperationResult:
-        if not self.settings.enabled or self.settings.credential_errors:
+        if not self.settings.rotation_enabled or self.settings.credential_errors:
             return OperationResult(
                 False, "Upstox token rotation is unavailable.", 503
             )
@@ -188,6 +318,7 @@ class TokenRotationService:
                 token_type="Bearer",
                 issued_at=issued_at,
                 expires_at=expires_at,
+                verified_at=current_milliseconds,
             )
         except UpstoxAPIError as error:
             LOGGER.warning("Rejected an unverifiable Upstox token: %s", error)
@@ -223,3 +354,37 @@ def _payload_milliseconds(payload: dict[str, Any], name: str) -> int:
         raise ValueError(f"Missing or invalid {name}.")
     return parsed
 
+
+def _jwt_timestamps(access_token: str) -> tuple[int | None, int | None]:
+    """Read already-verified JWT timestamps for display and local expiry."""
+    parts = access_token.split(".")
+    if len(parts) != 3:
+        return None, None
+    try:
+        encoded_payload = parts[1] + "=" * (-len(parts[1]) % 4)
+        payload = json.loads(
+            base64.urlsafe_b64decode(encoded_payload).decode("utf-8")
+        )
+        if not isinstance(payload, dict):
+            return None, None
+        issued_at = _seconds_to_milliseconds(payload.get("iat"))
+        expires_at = _seconds_to_milliseconds(payload.get("exp"))
+        return issued_at, expires_at
+    except (
+        ValueError,
+        TypeError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        binascii.Error,
+    ):
+        return None, None
+
+
+def _seconds_to_milliseconds(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        return None
+    return seconds * 1000 if seconds > 0 else None

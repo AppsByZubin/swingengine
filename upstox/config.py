@@ -61,9 +61,12 @@ def _parse_time(raw_value: str, name: str, errors: list[str]) -> time:
 
 @dataclass(frozen=True)
 class UpstoxSettings:
-    """Settings for the semi-automated daily token workflow."""
+    """Settings for manual token management and optional future rotation."""
 
     enabled: bool
+    monitor_enabled: bool
+    monitor_interval_seconds: int
+    rotation_enabled: bool
     api_key: str
     api_secret: str
     expected_user_id: str
@@ -92,11 +95,20 @@ class UpstoxSettings:
         values = environ if env is None else env
         errors: list[str] = []
 
-        enabled = _parse_bool(
+        management_enabled = _parse_bool(
+            values, "UPSTOX_TOKEN_MANAGEMENT_ENABLED", False, errors
+        )
+        monitor_enabled = _parse_bool(
+            values,
+            "UPSTOX_TOKEN_MONITOR_ENABLED",
+            management_enabled,
+            errors,
+        )
+        rotation_enabled = _parse_bool(
             values, "UPSTOX_TOKEN_ROTATION_ENABLED", False, errors
         )
         webhook_enabled = _parse_bool(
-            values, "UPSTOX_WEBHOOK_ENABLED", enabled, errors
+            values, "UPSTOX_WEBHOOK_ENABLED", rotation_enabled, errors
         )
         verify_webhook_token = _parse_bool(
             values, "UPSTOX_VERIFY_WEBHOOK_TOKEN", True, errors
@@ -105,14 +117,16 @@ class UpstoxSettings:
         api_key = values.get("UPSTOX_API_KEY", "").strip()
         api_secret = values.get("UPSTOX_API_SECRET", "").strip()
         expected_user_id = values.get("UPSTOX_EXPECTED_USER_ID", "").strip()
+        enabled = management_enabled or monitor_enabled or rotation_enabled
         credential_errors: list[str] = []
         if enabled:
+            if not expected_user_id:
+                credential_errors.append("UPSTOX_EXPECTED_USER_ID is required")
+        if rotation_enabled:
             if not api_key:
                 credential_errors.append("UPSTOX_API_KEY is required")
             if not api_secret:
                 credential_errors.append("UPSTOX_API_SECRET is required")
-            if not expected_user_id:
-                credential_errors.append("UPSTOX_EXPECTED_USER_ID is required")
 
         api_base_url = values.get(
             "UPSTOX_API_BASE_URL", "https://api.upstox.com"
@@ -145,6 +159,9 @@ class UpstoxSettings:
 
         request_timeout_seconds = _parse_positive_int(
             values, "UPSTOX_TOKEN_REQUEST_TIMEOUT_SECONDS", 15, errors
+        )
+        monitor_interval_seconds = _parse_positive_int(
+            values, "UPSTOX_TOKEN_CHECK_INTERVAL_SECONDS", 10_800, errors
         )
         retry_interval_seconds = _parse_positive_int(
             values, "UPSTOX_TOKEN_RETRY_INTERVAL_SECONDS", 300, errors
@@ -184,6 +201,9 @@ class UpstoxSettings:
 
         return cls(
             enabled=enabled,
+            monitor_enabled=monitor_enabled,
+            monitor_interval_seconds=monitor_interval_seconds,
+            rotation_enabled=rotation_enabled,
             api_key=api_key,
             api_secret=api_secret,
             expected_user_id=expected_user_id,
@@ -201,4 +221,3 @@ class UpstoxSettings:
             webhook_path=webhook_path,
             credential_errors=tuple(credential_errors),
         )
-

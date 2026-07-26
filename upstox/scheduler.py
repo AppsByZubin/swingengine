@@ -25,7 +25,7 @@ class TokenRequestScheduler:
         self._completed_date: str | None = None
 
     def start(self) -> None:
-        if not self.settings.enabled:
+        if not self.settings.rotation_enabled:
             return
         if self._thread is not None:
             return
