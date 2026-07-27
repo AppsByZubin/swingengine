@@ -14,7 +14,7 @@ features:
   slash_commands:
     - command: /swingengine
       description: Send a command to SwingEngine
-      usage_hint: help | ping | status | auth status | auth set <token>
+      usage_hint: help | ping | status | auth status | auth set <token> | asset refresh | asset search <query>
       should_escape: false
 
 oauth_config:

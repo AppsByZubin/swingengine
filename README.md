@@ -141,6 +141,44 @@ Run the tests with:
 pytest -q
 ```
 
+## PostgreSQL database
+
+Run the setup script on the server that already hosts PostgreSQL for
+Botsquadron:
+
+```bash
+./setup_database.sh
+```
+
+The script automatically runs `psql` through the local `postgres` system
+account, creates the `swingengine` database if it does not exist, and applies
+[`database/schema.sql`](database/schema.sql). It may request the server user's
+`sudo` password, but it does not require a PostgreSQL password or an
+interactive database login. It is also safe to run the whole setup script as
+root:
+
+```bash
+sudo ./setup_database.sh
+```
+
+The default database and owner are `swingengine` and `postgres`. They can be
+overridden for a different installation:
+
+```bash
+SWINGENGINE_DATABASE_NAME=another_name \
+SWINGENGINE_DATABASE_OWNER=existing_postgres_role \
+./setup_database.sh
+```
+
+Both scripts stop on the first error. The SQL prevents concurrent schema
+deployments and applies table changes in a transaction. It is safe to rerun
+unchanged. As requirements evolve, keep the `CREATE TABLE IF NOT EXISTS`
+statements for new installations and append explicit, rerunnable changes such
+as `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ...` inside the existing
+transaction. Editing a column inside `CREATE TABLE IF NOT EXISTS` does not
+update an existing table. Back up production before destructive or
+data-converting changes.
+
 ## Container image
 
 Build and run the service locally with Docker:
