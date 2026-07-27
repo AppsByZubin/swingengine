@@ -45,6 +45,42 @@ The app responds privately to the user who invokes one of these commands:
 /swingengine status
 /swingengine auth status
 /swingengine auth set <token>
+/swingengine asset refresh
+/swingengine asset search sun
+```
+
+## NSE asset search
+
+Refresh the local Upstox NSE instrument catalog before the first search:
+
+```text
+/swingengine asset refresh
+```
+
+The command downloads
+`https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz`,
+unpacks and validates it, then atomically replaces the existing JSON catalog.
+If the download or JSON is invalid, the previous catalog remains available.
+
+Searches are case-insensitive and match trading symbols, names, asset and
+underlying symbols, instrument keys, and ISINs:
+
+```text
+/swingengine asset search sun
+```
+
+NSE cash-market instruments are shown before related derivatives, and output
+is capped at 20 results by default. The catalog is cached in memory after it is
+first loaded.
+
+The defaults work with the persistent volume described below. They can be
+overridden when needed:
+
+```bash
+export UPSTOX_ASSET_FILE=/var/lib/swingengine/NSE.json
+export UPSTOX_ASSET_URL=https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz
+export UPSTOX_ASSET_REQUEST_TIMEOUT_SECONDS=30
+export UPSTOX_ASSET_SEARCH_LIMIT=20
 ```
 
 ## Upstox token management

@@ -4,6 +4,7 @@ import logging
 
 from slack.app import run as run_slack
 from slack.config import ConfigurationError
+from upstox.assets import AssetConfigurationError
 from upstox.config import UpstoxConfigurationError
 
 LOGGER = logging.getLogger(__name__)
@@ -12,7 +13,11 @@ LOGGER = logging.getLogger(__name__)
 def main() -> int:
     try:
         run_slack()
-    except (ConfigurationError, UpstoxConfigurationError) as error:
+    except (
+        ConfigurationError,
+        UpstoxConfigurationError,
+        AssetConfigurationError,
+    ) as error:
         print(f"Configuration error: {error}")
         return 2
     except KeyboardInterrupt:

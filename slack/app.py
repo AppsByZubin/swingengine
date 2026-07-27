@@ -10,6 +10,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack.commands import CommandRouter, build_router
 from slack.config import Settings
 from slack.notifier import SlackTokenNotifier
+from upstox.assets import AssetCatalog, AssetCatalogSettings
 from upstox.client import UpstoxAuthClient
 from upstox.config import UpstoxSettings
 from upstox.monitor import TokenHealthMonitor
@@ -90,6 +91,7 @@ def run() -> None:
     """Start token services and the blocking Socket Mode listener."""
     settings = Settings.from_env()
     upstox_settings = UpstoxSettings.from_env()
+    asset_settings = AssetCatalogSettings.from_env()
     logging.basicConfig(
         level=settings.log_level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -100,7 +102,10 @@ def run() -> None:
     token_service = TokenRotationService(
         upstox_settings, token_store, auth_client
     )
-    slack_app = create_app(settings, build_router(token_service))
+    asset_catalog = AssetCatalog(asset_settings)
+    slack_app = create_app(
+        settings, build_router(token_service, asset_catalog)
+    )
     notifier = SlackTokenNotifier(
         slack_app.client,
         settings.alert_user_id,

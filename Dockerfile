@@ -15,7 +15,8 @@ COPY upstox ./upstox
 
 RUN groupadd --gid 10001 swingengine \
     && useradd --uid 10001 --gid swingengine --no-create-home swingengine \
-    && chown -R swingengine:swingengine /app
+    && mkdir -p /var/lib/swingengine \
+    && chown -R swingengine:swingengine /app /var/lib/swingengine
 
 USER 10001:10001
 

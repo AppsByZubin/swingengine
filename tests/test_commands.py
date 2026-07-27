@@ -1,4 +1,5 @@
 from slack.commands import CommandRouter, build_router, ephemeral
+from upstox.assets import AssetCatalogError, AssetSearchResult
 
 
 class FakeAuthService:
@@ -8,6 +9,38 @@ class FakeAuthService:
     def set_token_message(self, access_token: str) -> str:
         assert access_token == "new-token"
         return "Upstox token stored."
+
+
+class FakeAssetService:
+    def refresh(self) -> int:
+        return 12_345
+
+    def search(self, query: str) -> list[AssetSearchResult]:
+        assert query == "sun"
+        return [
+            AssetSearchResult(
+                trading_symbol="SUNPHARMA",
+                name="SUN PHARMACEUTICAL IND L",
+                segment="NSE_EQ",
+                instrument_type="EQ",
+                instrument_key="NSE_EQ|INE044A01036",
+            ),
+            AssetSearchResult(
+                trading_symbol="SUNTECH",
+                name="SUN TECH LTD",
+                segment="NSE_EQ",
+                instrument_type="EQ",
+                instrument_key="NSE_EQ|INE000000001",
+            ),
+        ]
+
+
+class FailingAssetService:
+    def refresh(self) -> int:
+        raise AssetCatalogError("Download failed.")
+
+    def search(self, query: str) -> list[AssetSearchResult]:
+        raise AssetCatalogError("Catalog is missing.")
 
 
 def test_empty_command_shows_help() -> None:
@@ -26,6 +59,8 @@ def test_help_lists_every_supported_command_and_disabled_workflow() -> None:
         "• `/swingengine status`",
         "• `/swingengine auth` or `/swingengine auth status`",
         "• `/swingengine auth set <token>`",
+        "• `/swingengine asset refresh`",
+        "• `/swingengine asset search <query>`",
         "• `/swingengine auth request`",
     )
     for entry in expected_entries:
@@ -74,6 +109,50 @@ def test_auth_command_rejects_unknown_action() -> None:
     response = build_router(FakeAuthService()).dispatch("auth rotate")
 
     assert "Unknown auth action" in response["text"]
+
+
+def test_asset_refresh_reports_downloaded_count() -> None:
+    response = build_router(
+        asset_service=FakeAssetService()
+    ).dispatch("asset refresh")
+
+    assert response == ephemeral(
+        ":white_check_mark: Refreshed 12,345 NSE assets."
+    )
+
+
+def test_asset_search_returns_related_instruments() -> None:
+    response = build_router(
+        asset_service=FakeAssetService()
+    ).dispatch("asset search sun")
+
+    assert response["response_type"] == "ephemeral"
+    assert "SUNPHARMA" in response["text"]
+    assert "SUNTECH" in response["text"]
+    assert "NSE_EQ|INE044A01036" in response["text"]
+
+
+def test_asset_search_requires_a_query() -> None:
+    response = build_router(
+        asset_service=FakeAssetService()
+    ).dispatch("asset search")
+
+    assert "Provide a search term" in response["text"]
+
+
+def test_asset_command_reports_catalog_errors() -> None:
+    router = build_router(asset_service=FailingAssetService())
+
+    assert "Download failed" in router.dispatch("asset refresh")["text"]
+    assert "Catalog is missing" in router.dispatch("asset search sun")["text"]
+
+
+def test_asset_command_rejects_unknown_action() -> None:
+    response = build_router(
+        asset_service=FakeAssetService()
+    ).dispatch("asset delete")
+
+    assert "Unknown asset action" in response["text"]
 
 
 def test_unknown_command_suggests_help() -> None:
