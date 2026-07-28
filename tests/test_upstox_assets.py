@@ -189,5 +189,5 @@ def test_search_matches_instrument_key_and_isin(tmp_path: Path) -> None:
 def test_search_requires_a_refreshed_catalog(tmp_path: Path) -> None:
     catalog = AssetCatalog(settings(tmp_path / "NSE.json"))
 
-    with pytest.raises(AssetCatalogError, match="asset refresh"):
+    with pytest.raises(AssetCatalogError, match="instrument refresh"):
         catalog.search("sun")

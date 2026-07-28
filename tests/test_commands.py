@@ -113,8 +113,8 @@ def test_help_lists_every_supported_command_and_disabled_workflow() -> None:
         "• `/swingengine status`",
         "• `/swingengine auth` or `/swingengine auth status`",
         "• `/swingengine auth set <token>`",
-        "• `/swingengine asset refresh`",
-        "• `/swingengine asset search <query>`",
+        "• `/swingengine instrument refresh`",
+        "• `/swingengine instrument search <query>`",
         "• `/swingengine asset add <trading_symbol>`",
         "• `/swingengine asset delete <trading_symbol>`",
         "• `/swingengine asset list`",
@@ -171,20 +171,20 @@ def test_auth_command_rejects_unknown_action() -> None:
     assert "Unknown auth action" in response["text"]
 
 
-def test_asset_refresh_reports_downloaded_count() -> None:
+def test_instrument_refresh_reports_downloaded_count() -> None:
     response = build_router(
         asset_service=FakeAssetService()
-    ).dispatch("asset refresh")
+    ).dispatch("instrument refresh")
 
     assert response == ephemeral(
-        ":white_check_mark: Refreshed 12,345 NSE assets."
+        ":white_check_mark: Refreshed 12,345 NSE instruments."
     )
 
 
-def test_asset_search_returns_related_instruments() -> None:
+def test_instrument_search_returns_related_instruments() -> None:
     response = build_router(
         asset_service=FakeAssetService()
-    ).dispatch("asset search sun")
+    ).dispatch("instrument search sun")
 
     assert response["response_type"] == "ephemeral"
     assert "SUNPHARMA" in response["text"]
@@ -192,19 +192,21 @@ def test_asset_search_returns_related_instruments() -> None:
     assert "NSE_EQ|INE044A01036" in response["text"]
 
 
-def test_asset_search_requires_a_query() -> None:
+def test_instrument_search_requires_a_query() -> None:
     response = build_router(
         asset_service=FakeAssetService()
-    ).dispatch("asset search")
+    ).dispatch("instrument search")
 
     assert "Provide a search term" in response["text"]
 
 
-def test_asset_command_reports_catalog_errors() -> None:
+def test_instrument_command_reports_catalog_errors() -> None:
     router = build_router(asset_service=FailingAssetService())
 
-    assert "Download failed" in router.dispatch("asset refresh")["text"]
-    assert "Catalog is missing" in router.dispatch("asset search sun")["text"]
+    assert "Download failed" in router.dispatch("instrument refresh")["text"]
+    assert "Catalog is missing" in router.dispatch(
+        "instrument search sun"
+    )["text"]
 
 
 def test_asset_add_resolves_an_exact_nse_symbol_and_saves_it() -> None:
@@ -355,6 +357,21 @@ def test_asset_command_rejects_unknown_action() -> None:
     ).dispatch("asset import")
 
     assert "Unknown asset action" in response["text"]
+
+
+def test_instrument_command_rejects_unknown_action() -> None:
+    response = build_router(
+        asset_service=FakeAssetService()
+    ).dispatch("instrument import")
+
+    assert "Unknown instrument action" in response["text"]
+
+
+def test_asset_command_no_longer_handles_instrument_actions() -> None:
+    router = build_router(asset_service=FakeAssetService())
+
+    assert "Unknown asset action" in router.dispatch("asset refresh")["text"]
+    assert "Unknown asset action" in router.dispatch("asset search sun")["text"]
 
 
 def test_unknown_command_suggests_help() -> None:

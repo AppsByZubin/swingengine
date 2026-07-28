@@ -236,7 +236,7 @@ class AssetCatalog:
         except FileNotFoundError as error:
             raise AssetCatalogError(
                 "Asset catalog is not available. Run "
-                "`/swingengine asset refresh` first."
+                "`/swingengine instrument refresh` first."
             ) from error
         except OSError as error:
             raise AssetCatalogError(

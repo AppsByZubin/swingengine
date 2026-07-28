@@ -70,10 +70,12 @@ def help_command(_: str = "") -> SlackResponse:
         "• `/swingengine auth` or `/swingengine auth status` — check the "
         "stored Upstox token\n"
         "• `/swingengine auth set <token>` — validate and store a new token\n\n"
-        "*Assets*\n"
-        "• `/swingengine asset refresh` — download the latest NSE assets\n"
-        "• `/swingengine asset search <query>` — find NSE assets by name, "
-        "symbol, key, or ISIN\n"
+        "*Instruments*\n"
+        "• `/swingengine instrument refresh` — download the latest NSE "
+        "instruments\n"
+        "• `/swingengine instrument search <query>` — find NSE instruments "
+        "by name, symbol, key, or ISIN\n"
+        "\n*Assets*\n"
         "• `/swingengine asset add <trading_symbol>` — save an NSE asset\n"
         "• `/swingengine asset delete <trading_symbol>` — delete a saved "
         "asset\n"
@@ -130,33 +132,32 @@ def auth_command(
     )
 
 
-def asset_command(
+def instrument_command(
     arguments: str = "",
     asset_service: AssetService | None = None,
-    tracker_service: AssetTrackerService | None = None,
 ) -> SlackResponse:
     parts = arguments.strip().split(maxsplit=1)
     action = parts[0].casefold() if parts else ""
     if action == "refresh":
         if asset_service is None:
-            return ephemeral("Upstox asset search is not configured.")
+            return ephemeral("Upstox instrument search is not configured.")
         if len(parts) != 1:
-            return ephemeral("Use `/swingengine asset refresh`.")
+            return ephemeral("Use `/swingengine instrument refresh`.")
         try:
             asset_count = asset_service.refresh()
         except AssetCatalogError as error:
             return ephemeral(f":warning: {error}")
         return ephemeral(
-            f":white_check_mark: Refreshed {asset_count:,} NSE assets."
+            f":white_check_mark: Refreshed {asset_count:,} NSE instruments."
         )
 
     if action == "search":
         if asset_service is None:
-            return ephemeral("Upstox asset search is not configured.")
+            return ephemeral("Upstox instrument search is not configured.")
         if len(parts) != 2 or not parts[1].strip():
             return ephemeral(
                 "Provide a search term: "
-                "`/swingengine asset search <query>`."
+                "`/swingengine instrument search <query>`."
             )
         query = parts[1].strip()
         try:
@@ -164,17 +165,33 @@ def asset_command(
         except AssetCatalogError as error:
             return ephemeral(f":warning: {error}")
         if not matches:
-            return ephemeral(f"No NSE assets found for `{_code_text(query)}`.")
+            return ephemeral(
+                f"No NSE instruments found for `{_code_text(query)}`."
+            )
 
         lines = [
-            f"*NSE assets matching `{_code_text(query)}`*",
+            f"*NSE instruments matching `{_code_text(query)}`*",
             *(_format_asset(match) for match in matches),
         ]
         return ephemeral("\n".join(lines))
 
+    return ephemeral(
+        "Unknown instrument action. Use "
+        "`/swingengine instrument refresh` or "
+        "`/swingengine instrument search <query>`."
+    )
+
+
+def asset_command(
+    arguments: str = "",
+    asset_service: AssetService | None = None,
+    tracker_service: AssetTrackerService | None = None,
+) -> SlackResponse:
+    parts = arguments.strip().split(maxsplit=1)
+    action = parts[0].casefold() if parts else ""
     if action == "add":
         if asset_service is None:
-            return ephemeral("Upstox asset search is not configured.")
+            return ephemeral("Upstox instrument search is not configured.")
         if tracker_service is None:
             return ephemeral("Asset database is not configured.")
         if len(parts) != 2 or not parts[1].strip():
@@ -261,8 +278,8 @@ def asset_command(
         )
 
     return ephemeral(
-        "Unknown asset action. Use `/swingengine asset refresh` or "
-        "`/swingengine asset search|add|delete|list ...`."
+        "Unknown asset action. Use "
+        "`/swingengine asset add|delete|list ...`."
     )
 
 
@@ -442,6 +459,10 @@ def build_router(
     router.register(
         "auth",
         lambda arguments: auth_command(arguments, auth_service),
+    )
+    router.register(
+        "instrument",
+        lambda arguments: instrument_command(arguments, asset_service),
     )
     router.register(
         "asset",

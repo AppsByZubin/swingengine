@@ -45,8 +45,8 @@ The app responds privately to the user who invokes one of these commands:
 /swingengine status
 /swingengine auth status
 /swingengine auth set <token>
-/swingengine asset refresh
-/swingengine asset search sun
+/swingengine instrument refresh
+/swingengine instrument search sun
 /swingengine asset add SUNPHARMA
 /swingengine asset delete SUNPHARMA
 /swingengine asset list
@@ -55,12 +55,12 @@ The app responds privately to the user who invokes one of these commands:
 /swingengine tracker list
 ```
 
-## NSE asset search
+## NSE instrument search
 
 Refresh the local Upstox NSE instrument catalog before the first search:
 
 ```text
-/swingengine asset refresh
+/swingengine instrument refresh
 ```
 
 The command downloads
@@ -72,7 +72,7 @@ Searches are case-insensitive and match trading symbols, names, asset and
 underlying symbols, instrument keys, and ISINs:
 
 ```text
-/swingengine asset search sun
+/swingengine instrument search sun
 ```
 
 NSE cash-market instruments are shown before related derivatives, and output
