@@ -2,6 +2,7 @@
 
 import logging
 
+from database.config import DatabaseConfigurationError
 from slack.app import run as run_slack
 from slack.config import ConfigurationError
 from upstox.assets import AssetConfigurationError
@@ -15,6 +16,7 @@ def main() -> int:
         run_slack()
     except (
         ConfigurationError,
+        DatabaseConfigurationError,
         UpstoxConfigurationError,
         AssetConfigurationError,
     ) as error:

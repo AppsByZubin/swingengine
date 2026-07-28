@@ -7,6 +7,8 @@ from typing import Any
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
+from database.config import DatabaseSettings
+from database.repository import AssetTrackerRepository
 from slack.commands import CommandRouter, build_router
 from slack.config import Settings
 from slack.notifier import SlackTokenNotifier
@@ -92,6 +94,7 @@ def run() -> None:
     settings = Settings.from_env()
     upstox_settings = UpstoxSettings.from_env()
     asset_settings = AssetCatalogSettings.from_env()
+    database_settings = DatabaseSettings.from_env()
     logging.basicConfig(
         level=settings.log_level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -103,8 +106,14 @@ def run() -> None:
         upstox_settings, token_store, auth_client
     )
     asset_catalog = AssetCatalog(asset_settings)
+    asset_tracker_repository = AssetTrackerRepository(database_settings)
     slack_app = create_app(
-        settings, build_router(token_service, asset_catalog)
+        settings,
+        build_router(
+            token_service,
+            asset_catalog,
+            asset_tracker_repository,
+        ),
     )
     notifier = SlackTokenNotifier(
         slack_app.client,

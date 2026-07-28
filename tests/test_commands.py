@@ -1,3 +1,14 @@
+from datetime import date
+
+from database.repository import (
+    AssetAlreadyExistsError,
+    AssetInUseError,
+    AssetNotFoundError,
+    AssetRecord,
+    TrackerAlreadyExistsError,
+    TrackerEntry,
+    TrackerNotFoundError,
+)
 from slack.commands import CommandRouter, build_router, ephemeral
 from upstox.assets import AssetCatalogError, AssetSearchResult
 
@@ -16,7 +27,7 @@ class FakeAssetService:
         return 12_345
 
     def search(self, query: str) -> list[AssetSearchResult]:
-        assert query == "sun"
+        assert query.casefold() in {"sun", "sunpharma"}
         return [
             AssetSearchResult(
                 trading_symbol="SUNPHARMA",
@@ -33,6 +44,49 @@ class FakeAssetService:
                 instrument_key="NSE_EQ|INE000000001",
             ),
         ]
+
+
+class FakeAssetTrackerService:
+    def __init__(self) -> None:
+        self.asset = AssetRecord(
+            asset_id=42,
+            asset_name="SUN PHARMACEUTICAL IND L",
+            trading_symbol="SUNPHARMA",
+            instrument_key="NSE_EQ|INE044A01036",
+        )
+        self.entry = TrackerEntry(
+            tracker_details_id=7,
+            asset_id=42,
+            asset_name=self.asset.asset_name,
+            trading_symbol=self.asset.trading_symbol,
+            added_date=date(2026, 7, 28),
+        )
+        self.added_catalog_asset: AssetSearchResult | None = None
+        self.deleted_asset_symbol = ""
+        self.added_tracker_symbol = ""
+        self.deleted_tracker_symbol = ""
+
+    def add_asset(self, asset: AssetSearchResult) -> AssetRecord:
+        self.added_catalog_asset = asset
+        return self.asset
+
+    def delete_asset(self, trading_symbol: str) -> AssetRecord:
+        self.deleted_asset_symbol = trading_symbol
+        return self.asset
+
+    def list_assets(self) -> list[AssetRecord]:
+        return [self.asset]
+
+    def add_tracker(self, trading_symbol: str) -> TrackerEntry:
+        self.added_tracker_symbol = trading_symbol
+        return self.entry
+
+    def delete_tracker(self, trading_symbol: str) -> TrackerEntry:
+        self.deleted_tracker_symbol = trading_symbol
+        return self.entry
+
+    def list_tracker(self) -> list[TrackerEntry]:
+        return [self.entry]
 
 
 class FailingAssetService:
@@ -61,6 +115,12 @@ def test_help_lists_every_supported_command_and_disabled_workflow() -> None:
         "• `/swingengine auth set <token>`",
         "• `/swingengine asset refresh`",
         "• `/swingengine asset search <query>`",
+        "• `/swingengine asset add <trading_symbol>`",
+        "• `/swingengine asset delete <trading_symbol>`",
+        "• `/swingengine asset list`",
+        "• `/swingengine tracker add <trading_symbol>`",
+        "• `/swingengine tracker delete <trading_symbol>`",
+        "• `/swingengine tracker list`",
         "• `/swingengine auth request`",
     )
     for entry in expected_entries:
@@ -147,10 +207,152 @@ def test_asset_command_reports_catalog_errors() -> None:
     assert "Catalog is missing" in router.dispatch("asset search sun")["text"]
 
 
+def test_asset_add_resolves_an_exact_nse_symbol_and_saves_it() -> None:
+    tracker_service = FakeAssetTrackerService()
+    response = build_router(
+        asset_service=FakeAssetService(),
+        tracker_service=tracker_service,
+    ).dispatch("asset add sunpharma")
+
+    assert response == ephemeral(
+        ":white_check_mark: Saved asset `SUNPHARMA`."
+    )
+    assert tracker_service.added_catalog_asset is not None
+    assert (
+        tracker_service.added_catalog_asset.instrument_key
+        == "NSE_EQ|INE044A01036"
+    )
+
+
+def test_asset_add_requires_an_exact_trading_symbol() -> None:
+    response = build_router(
+        asset_service=FakeAssetService(),
+        tracker_service=FakeAssetTrackerService(),
+    ).dispatch("asset add sun")
+
+    assert "No exact NSE trading symbol" in response["text"]
+
+
+def test_asset_add_reports_an_existing_saved_asset() -> None:
+    class DuplicateAssetService(FakeAssetTrackerService):
+        def add_asset(self, asset: AssetSearchResult) -> AssetRecord:
+            raise AssetAlreadyExistsError
+
+    response = build_router(
+        asset_service=FakeAssetService(),
+        tracker_service=DuplicateAssetService(),
+    ).dispatch("asset add SUNPHARMA")
+
+    assert "already saved" in response["text"]
+
+
+def test_asset_delete_removes_a_saved_asset() -> None:
+    tracker_service = FakeAssetTrackerService()
+    response = build_router(
+        tracker_service=tracker_service
+    ).dispatch("asset delete sunpharma")
+
+    assert response == ephemeral(
+        ":white_check_mark: Deleted asset `SUNPHARMA`."
+    )
+    assert tracker_service.deleted_asset_symbol == "sunpharma"
+
+
+def test_asset_delete_requires_tracker_removal_first() -> None:
+    class TrackedAssetService(FakeAssetTrackerService):
+        def delete_asset(self, trading_symbol: str) -> AssetRecord:
+            raise AssetInUseError
+
+    response = build_router(
+        tracker_service=TrackedAssetService()
+    ).dispatch("asset delete SUNPHARMA")
+
+    assert "still tracked" in response["text"]
+    assert "tracker entry first" in response["text"]
+
+
+def test_asset_list_shows_names_symbols_and_instrument_keys() -> None:
+    response = build_router(
+        tracker_service=FakeAssetTrackerService()
+    ).dispatch("asset list")
+
+    assert "*Saved assets*" in response["text"]
+    assert "SUN PHARMACEUTICAL IND L" in response["text"]
+    assert "SUNPHARMA" in response["text"]
+    assert "NSE_EQ|INE044A01036" in response["text"]
+
+
+def test_tracker_add_matches_a_saved_asset() -> None:
+    tracker_service = FakeAssetTrackerService()
+    response = build_router(
+        tracker_service=tracker_service
+    ).dispatch("tracker add sunpharma")
+
+    assert response == ephemeral(
+        ":white_check_mark: Tracking `SUNPHARMA` from 2026-07-28."
+    )
+    assert tracker_service.added_tracker_symbol == "sunpharma"
+
+
+def test_tracker_add_requires_a_saved_untracked_asset() -> None:
+    class MissingAssetService(FakeAssetTrackerService):
+        def add_tracker(self, trading_symbol: str) -> TrackerEntry:
+            raise AssetNotFoundError
+
+    class DuplicateTrackerService(FakeAssetTrackerService):
+        def add_tracker(self, trading_symbol: str) -> TrackerEntry:
+            raise TrackerAlreadyExistsError
+
+    missing_response = build_router(
+        tracker_service=MissingAssetService()
+    ).dispatch("tracker add MISSING")
+    duplicate_response = build_router(
+        tracker_service=DuplicateTrackerService()
+    ).dispatch("tracker add SUNPHARMA")
+
+    assert "not saved" in missing_response["text"]
+    assert "already tracked" in duplicate_response["text"]
+
+
+def test_tracker_delete_removes_the_matching_entry() -> None:
+    tracker_service = FakeAssetTrackerService()
+    response = build_router(
+        tracker_service=tracker_service
+    ).dispatch("tracker delete SUNPHARMA")
+
+    assert response == ephemeral(
+        ":white_check_mark: Stopped tracking `SUNPHARMA`."
+    )
+    assert tracker_service.deleted_tracker_symbol == "SUNPHARMA"
+
+
+def test_tracker_delete_reports_a_missing_entry() -> None:
+    class MissingTrackerService(FakeAssetTrackerService):
+        def delete_tracker(self, trading_symbol: str) -> TrackerEntry:
+            raise TrackerNotFoundError
+
+    response = build_router(
+        tracker_service=MissingTrackerService()
+    ).dispatch("tracker delete MISSING")
+
+    assert "not tracked" in response["text"]
+
+
+def test_tracker_list_shows_asset_name_symbol_and_added_date() -> None:
+    response = build_router(
+        tracker_service=FakeAssetTrackerService()
+    ).dispatch("tracker list")
+
+    assert "*Tracked assets*" in response["text"]
+    assert "SUN PHARMACEUTICAL IND L" in response["text"]
+    assert "SUNPHARMA" in response["text"]
+    assert "2026-07-28" in response["text"]
+
+
 def test_asset_command_rejects_unknown_action() -> None:
     response = build_router(
         asset_service=FakeAssetService()
-    ).dispatch("asset delete")
+    ).dispatch("asset import")
 
     assert "Unknown asset action" in response["text"]
 

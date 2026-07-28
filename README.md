@@ -47,6 +47,12 @@ The app responds privately to the user who invokes one of these commands:
 /swingengine auth set <token>
 /swingengine asset refresh
 /swingengine asset search sun
+/swingengine asset add SUNPHARMA
+/swingengine asset delete SUNPHARMA
+/swingengine asset list
+/swingengine tracker add SUNPHARMA
+/swingengine tracker delete SUNPHARMA
+/swingengine tracker list
 ```
 
 ## NSE asset search
@@ -72,6 +78,19 @@ underlying symbols, instrument keys, and ISINs:
 NSE cash-market instruments are shown before related derivatives, and output
 is capped at 20 results by default. The catalog is cached in memory after it is
 first loaded.
+
+Save an exact NSE trading symbol from the catalog, then add the saved asset to
+the tracker:
+
+```text
+/swingengine asset add SUNPHARMA
+/swingengine tracker add SUNPHARMA
+```
+
+`asset list` shows saved names, trading symbols, and instrument keys.
+`tracker list` joins tracked rows to their asset names and symbols. An asset
+must be removed from the tracker before it can be deleted from the saved asset
+table.
 
 The defaults work with the persistent volume described below. They can be
 overridden when needed:
@@ -179,6 +198,17 @@ transaction. Editing a column inside `CREATE TABLE IF NOT EXISTS` does not
 update an existing table. Back up production before destructive or
 data-converting changes.
 
+The Slack asset and tracker commands connect at runtime with:
+
+```bash
+export SWINGENGINE_DATABASE_URL='postgresql://swingengine_app:password@postgres:5432/swingengine'
+export SWINGENGINE_DATABASE_CONNECT_TIMEOUT_SECONDS=10
+```
+
+Use a PostgreSQL role with `SELECT`, `INSERT`, and `DELETE` privileges on the
+`assets` and `tracker` tables, plus usage on their identity sequences. Keep
+credentials out of source control.
+
 ## Container image
 
 Build and run the service locally with Docker:
@@ -192,6 +222,7 @@ docker run --rm \
   -e UPSTOX_TOKEN_MANAGEMENT_ENABLED \
   -e UPSTOX_TOKEN_MONITOR_ENABLED \
   -e UPSTOX_EXPECTED_USER_ID \
+  -e SWINGENGINE_DATABASE_URL \
   -v swingengine-state:/var/lib/swingengine \
   swingengine:local
 ```

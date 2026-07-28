@@ -4,6 +4,16 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from database.repository import (
+    AssetAlreadyExistsError,
+    AssetInUseError,
+    AssetNotFoundError,
+    AssetRecord,
+    RepositoryError,
+    TrackerAlreadyExistsError,
+    TrackerEntry,
+    TrackerNotFoundError,
+)
 from upstox.assets import AssetCatalogError, AssetSearchResult
 
 SlackResponse = dict[str, Any]
@@ -26,6 +36,26 @@ class AssetService(Protocol):
         """Find assets related to the supplied query."""
 
 
+class AssetTrackerService(Protocol):
+    def add_asset(self, asset: AssetSearchResult) -> AssetRecord:
+        """Save an asset selected from the NSE catalog."""
+
+    def delete_asset(self, trading_symbol: str) -> AssetRecord:
+        """Delete and return a saved asset."""
+
+    def list_assets(self) -> list[AssetRecord]:
+        """Return every saved asset."""
+
+    def add_tracker(self, trading_symbol: str) -> TrackerEntry:
+        """Add a saved asset to the tracker."""
+
+    def delete_tracker(self, trading_symbol: str) -> TrackerEntry:
+        """Delete and return an asset's tracker entry."""
+
+    def list_tracker(self) -> list[TrackerEntry]:
+        """Return tracker entries joined with their saved assets."""
+
+
 def ephemeral(text: str) -> SlackResponse:
     """Build a response visible only to the user who ran the command."""
     return {"response_type": "ephemeral", "text": text}
@@ -43,7 +73,17 @@ def help_command(_: str = "") -> SlackResponse:
         "*Assets*\n"
         "• `/swingengine asset refresh` — download the latest NSE assets\n"
         "• `/swingengine asset search <query>` — find NSE assets by name, "
-        "symbol, key, or ISIN\n\n"
+        "symbol, key, or ISIN\n"
+        "• `/swingengine asset add <trading_symbol>` — save an NSE asset\n"
+        "• `/swingengine asset delete <trading_symbol>` — delete a saved "
+        "asset\n"
+        "• `/swingengine asset list` — list saved assets\n\n"
+        "*Tracker*\n"
+        "• `/swingengine tracker add <trading_symbol>` — start tracking a "
+        "saved asset\n"
+        "• `/swingengine tracker delete <trading_symbol>` — stop tracking a "
+        "saved asset\n"
+        "• `/swingengine tracker list` — list tracked assets\n\n"
         "*Disabled workflow*\n"
         "• `/swingengine auth request` — unavailable until the Upstox "
         "notifier webhook is enabled"
@@ -91,14 +131,15 @@ def auth_command(
 
 
 def asset_command(
-    arguments: str = "", asset_service: AssetService | None = None
+    arguments: str = "",
+    asset_service: AssetService | None = None,
+    tracker_service: AssetTrackerService | None = None,
 ) -> SlackResponse:
-    if asset_service is None:
-        return ephemeral("Upstox asset search is not configured.")
-
     parts = arguments.strip().split(maxsplit=1)
     action = parts[0].casefold() if parts else ""
     if action == "refresh":
+        if asset_service is None:
+            return ephemeral("Upstox asset search is not configured.")
         if len(parts) != 1:
             return ephemeral("Use `/swingengine asset refresh`.")
         try:
@@ -110,6 +151,8 @@ def asset_command(
         )
 
     if action == "search":
+        if asset_service is None:
+            return ephemeral("Upstox asset search is not configured.")
         if len(parts) != 2 or not parts[1].strip():
             return ephemeral(
                 "Provide a search term: "
@@ -129,9 +172,172 @@ def asset_command(
         ]
         return ephemeral("\n".join(lines))
 
+    if action == "add":
+        if asset_service is None:
+            return ephemeral("Upstox asset search is not configured.")
+        if tracker_service is None:
+            return ephemeral("Asset database is not configured.")
+        if len(parts) != 2 or not parts[1].strip():
+            return ephemeral(
+                "Provide a trading symbol: "
+                "`/swingengine asset add <trading_symbol>`."
+            )
+
+        symbol = parts[1].strip()
+        try:
+            matches = asset_service.search(symbol)
+        except AssetCatalogError as error:
+            return ephemeral(f":warning: {error}")
+        asset = next(
+            (
+                match
+                for match in matches
+                if match.trading_symbol.casefold() == symbol.casefold()
+            ),
+            None,
+        )
+        if asset is None:
+            return ephemeral(
+                f"No exact NSE trading symbol found for "
+                f"`{_code_text(symbol)}`."
+            )
+
+        try:
+            saved_asset = tracker_service.add_asset(asset)
+        except AssetAlreadyExistsError:
+            return ephemeral(
+                f"Asset `{_code_text(asset.trading_symbol)}` is already saved."
+            )
+        except RepositoryError as error:
+            return ephemeral(f":warning: {error}")
+        return ephemeral(
+            f":white_check_mark: Saved asset "
+            f"`{_code_text(saved_asset.trading_symbol)}`."
+        )
+
+    if action == "delete":
+        if tracker_service is None:
+            return ephemeral("Asset database is not configured.")
+        if len(parts) != 2 or not parts[1].strip():
+            return ephemeral(
+                "Provide a trading symbol: "
+                "`/swingengine asset delete <trading_symbol>`."
+            )
+
+        symbol = parts[1].strip()
+        try:
+            deleted_asset = tracker_service.delete_asset(symbol)
+        except AssetNotFoundError:
+            return ephemeral(
+                f"Asset `{_code_text(symbol)}` is not saved."
+            )
+        except AssetInUseError:
+            return ephemeral(
+                f"Asset `{_code_text(symbol)}` is still tracked. Delete its "
+                "tracker entry first."
+            )
+        except RepositoryError as error:
+            return ephemeral(f":warning: {error}")
+        return ephemeral(
+            f":white_check_mark: Deleted asset "
+            f"`{_code_text(deleted_asset.trading_symbol)}`."
+        )
+
+    if action == "list":
+        if tracker_service is None:
+            return ephemeral("Asset database is not configured.")
+        if len(parts) != 1:
+            return ephemeral("Use `/swingengine asset list`.")
+        try:
+            assets = tracker_service.list_assets()
+        except RepositoryError as error:
+            return ephemeral(f":warning: {error}")
+        if not assets:
+            return ephemeral("No assets have been saved.")
+        return ephemeral(
+            "\n".join(
+                ["*Saved assets*", *(_format_saved_asset(asset) for asset in assets)]
+            )
+        )
+
     return ephemeral(
         "Unknown asset action. Use `/swingengine asset refresh` or "
-        "`/swingengine asset search <query>`."
+        "`/swingengine asset search|add|delete|list ...`."
+    )
+
+
+def tracker_command(
+    arguments: str = "",
+    tracker_service: AssetTrackerService | None = None,
+) -> SlackResponse:
+    if tracker_service is None:
+        return ephemeral("Asset tracker database is not configured.")
+
+    parts = arguments.strip().split(maxsplit=1)
+    action = parts[0].casefold() if parts else ""
+    if action == "add":
+        if len(parts) != 2 or not parts[1].strip():
+            return ephemeral(
+                "Provide a trading symbol: "
+                "`/swingengine tracker add <trading_symbol>`."
+            )
+        symbol = parts[1].strip()
+        try:
+            entry = tracker_service.add_tracker(symbol)
+        except AssetNotFoundError:
+            return ephemeral(
+                f"Asset `{_code_text(symbol)}` is not saved. Add it first."
+            )
+        except TrackerAlreadyExistsError:
+            return ephemeral(
+                f"Asset `{_code_text(symbol)}` is already tracked."
+            )
+        except RepositoryError as error:
+            return ephemeral(f":warning: {error}")
+        return ephemeral(
+            f":white_check_mark: Tracking "
+            f"`{_code_text(entry.trading_symbol)}` from "
+            f"{entry.added_date.isoformat()}."
+        )
+
+    if action == "delete":
+        if len(parts) != 2 or not parts[1].strip():
+            return ephemeral(
+                "Provide a trading symbol: "
+                "`/swingengine tracker delete <trading_symbol>`."
+            )
+        symbol = parts[1].strip()
+        try:
+            entry = tracker_service.delete_tracker(symbol)
+        except TrackerNotFoundError:
+            return ephemeral(
+                f"Asset `{_code_text(symbol)}` is not tracked."
+            )
+        except RepositoryError as error:
+            return ephemeral(f":warning: {error}")
+        return ephemeral(
+            f":white_check_mark: Stopped tracking "
+            f"`{_code_text(entry.trading_symbol)}`."
+        )
+
+    if action == "list":
+        if len(parts) != 1:
+            return ephemeral("Use `/swingengine tracker list`.")
+        try:
+            entries = tracker_service.list_tracker()
+        except RepositoryError as error:
+            return ephemeral(f":warning: {error}")
+        if not entries:
+            return ephemeral("No assets are currently tracked.")
+        return ephemeral(
+            "\n".join(
+                ["*Tracked assets*", *(_format_tracker(entry) for entry in entries)]
+            )
+        )
+
+    return ephemeral(
+        "Unknown tracker action. Use "
+        "`/swingengine tracker add|delete|list ...`."
     )
 
 
@@ -155,6 +361,32 @@ def _format_asset(asset: AssetSearchResult) -> str:
         else ""
     )
     return f"• `{_code_text(symbol)}`{detail}{metadata}{key}"
+
+
+def _format_saved_asset(asset: AssetRecord) -> str:
+    detail = (
+        f" — {_slack_text(asset.asset_name)}"
+        if asset.asset_name and asset.asset_name != asset.trading_symbol
+        else ""
+    )
+    key = (
+        f" · `{_code_text(asset.instrument_key)}`"
+        if asset.instrument_key
+        else ""
+    )
+    return f"• `{_code_text(asset.trading_symbol)}`{detail}{key}"
+
+
+def _format_tracker(entry: TrackerEntry) -> str:
+    detail = (
+        f" — {_slack_text(entry.asset_name)}"
+        if entry.asset_name and entry.asset_name != entry.trading_symbol
+        else ""
+    )
+    return (
+        f"• `{_code_text(entry.trading_symbol)}`{detail} · added "
+        f"{entry.added_date.isoformat()}"
+    )
 
 
 def _slack_text(value: str) -> str:
@@ -198,6 +430,7 @@ class CommandRouter:
 def build_router(
     auth_service: TokenAuthService | None = None,
     asset_service: AssetService | None = None,
+    tracker_service: AssetTrackerService | None = None,
 ) -> CommandRouter:
     router = CommandRouter()
     router.register("help", help_command)
@@ -212,6 +445,12 @@ def build_router(
     )
     router.register(
         "asset",
-        lambda arguments: asset_command(arguments, asset_service),
+        lambda arguments: asset_command(
+            arguments, asset_service, tracker_service
+        ),
+    )
+    router.register(
+        "tracker",
+        lambda arguments: tracker_command(arguments, tracker_service),
     )
     return router
