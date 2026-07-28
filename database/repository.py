@@ -1,5 +1,6 @@
 """Database operations for saved assets and tracker membership."""
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
@@ -9,6 +10,8 @@ import psycopg
 
 from database.config import DatabaseSettings
 from upstox.assets import AssetSearchResult
+
+LOGGER = logging.getLogger(__name__)
 
 
 class RepositoryError(RuntimeError):
@@ -92,9 +95,17 @@ class AssetTrackerRepository:
         except psycopg.errors.UniqueViolation as error:
             raise AssetAlreadyExistsError from error
         except psycopg.Error as error:
+            LOGGER.exception(
+                "Failed to add asset trading_symbol=%r",
+                asset.trading_symbol,
+            )
             raise RepositoryError("Unable to add the asset.") from error
 
         if row is None:
+            LOGGER.error(
+                "Asset insert returned no row trading_symbol=%r",
+                asset.trading_symbol,
+            )
             raise RepositoryError("Unable to add the asset.")
         return _asset_record(row)
 
@@ -116,6 +127,10 @@ class AssetTrackerRepository:
         except psycopg.errors.ForeignKeyViolation as error:
             raise AssetInUseError from error
         except psycopg.Error as error:
+            LOGGER.exception(
+                "Failed to delete asset trading_symbol=%r",
+                trading_symbol,
+            )
             raise RepositoryError("Unable to delete the asset.") from error
 
         if row is None:
@@ -137,6 +152,7 @@ class AssetTrackerRepository:
                     """
                 ).fetchall()
         except psycopg.Error as error:
+            LOGGER.exception("Failed to list assets")
             raise RepositoryError("Unable to list assets.") from error
         return [_asset_record(row) for row in rows]
 
@@ -180,9 +196,19 @@ class AssetTrackerRepository:
         except (AssetNotFoundError, TrackerAlreadyExistsError):
             raise
         except psycopg.Error as error:
+            LOGGER.exception(
+                "Failed to add tracker entry trading_symbol=%r",
+                trading_symbol,
+            )
             raise RepositoryError("Unable to add the tracker entry.") from error
 
         if asset_row is None:
+            LOGGER.error(
+                "Tracker insert returned an asset without a matching row "
+                "trading_symbol=%r asset_id=%r",
+                trading_symbol,
+                row[1],
+            )
             raise RepositoryError("Unable to add the tracker entry.")
         return TrackerEntry(
             tracker_details_id=int(row[0]),
@@ -211,6 +237,10 @@ class AssetTrackerRepository:
                     (trading_symbol,),
                 ).fetchone()
         except psycopg.Error as error:
+            LOGGER.exception(
+                "Failed to delete tracker entry trading_symbol=%r",
+                trading_symbol,
+            )
             raise RepositoryError(
                 "Unable to delete the tracker entry."
             ) from error
@@ -237,6 +267,7 @@ class AssetTrackerRepository:
                     """
                 ).fetchall()
         except psycopg.Error as error:
+            LOGGER.exception("Failed to list tracker entries")
             raise RepositoryError("Unable to list tracker entries.") from error
         return [_tracker_entry(row) for row in rows]
 
