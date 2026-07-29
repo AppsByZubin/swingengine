@@ -24,10 +24,14 @@ class FakeAuthService:
 
 
 class FakeAssetService:
+    def __init__(self) -> None:
+        self.search_query = ""
+
     def refresh(self) -> int:
         return 12_345
 
     def search(self, query: str) -> list[AssetSearchResult]:
+        self.search_query = query
         assert query.casefold() in {"sun", "sunpharma"}
         return [
             AssetSearchResult(
@@ -60,6 +64,10 @@ class FakeAssetTrackerService:
             asset_id=42,
             asset_name=self.asset.asset_name,
             trading_symbol=self.asset.trading_symbol,
+            has_momentum=True,
+            is_order_created=False,
+            is_approved_for_order=True,
+            amount_allocated=12500.5,
             added_date=date(2026, 7, 28),
         )
         self.added_catalog_asset: AssetSearchResult | None = None
@@ -211,15 +219,17 @@ def test_instrument_command_reports_catalog_errors() -> None:
 
 
 def test_asset_add_resolves_an_exact_nse_symbol_and_saves_it() -> None:
+    asset_service = FakeAssetService()
     tracker_service = FakeAssetTrackerService()
     response = build_router(
-        asset_service=FakeAssetService(),
+        asset_service=asset_service,
         tracker_service=tracker_service,
     ).dispatch("asset add sunpharma")
 
     assert response == ephemeral(
         ":white_check_mark: Saved asset `SUNPHARMA`."
     )
+    assert asset_service.search_query == "SUNPHARMA"
     assert tracker_service.added_catalog_asset is not None
     assert (
         tracker_service.added_catalog_asset.instrument_key
@@ -246,7 +256,7 @@ def test_asset_add_reports_an_existing_saved_asset() -> None:
         tracker_service=DuplicateAssetService(),
     ).dispatch("asset add SUNPHARMA")
 
-    assert "already saved" in response["text"]
+    assert response == ephemeral("Asset `SUNPHARMA` is already present.")
 
 
 def test_asset_delete_removes_a_saved_asset() -> None:
@@ -258,7 +268,7 @@ def test_asset_delete_removes_a_saved_asset() -> None:
     assert response == ephemeral(
         ":white_check_mark: Deleted asset `SUNPHARMA`."
     )
-    assert tracker_service.deleted_asset_symbol == "sunpharma"
+    assert tracker_service.deleted_asset_symbol == "SUNPHARMA"
 
 
 def test_asset_delete_requires_tracker_removal_first() -> None:
@@ -306,7 +316,7 @@ def test_tracker_add_matches_a_saved_asset() -> None:
     assert response == ephemeral(
         ":white_check_mark: Tracking `SUNPHARMA` from 2026-07-28."
     )
-    assert tracker_service.added_tracker_symbol == "sunpharma"
+    assert tracker_service.added_tracker_symbol == "SUNPHARMA"
 
 
 def test_tracker_add_requires_a_saved_untracked_asset() -> None:
@@ -326,7 +336,9 @@ def test_tracker_add_requires_a_saved_untracked_asset() -> None:
     ).dispatch("tracker add SUNPHARMA")
 
     assert "not saved" in missing_response["text"]
-    assert "already tracked" in duplicate_response["text"]
+    assert duplicate_response == ephemeral(
+        "Asset `SUNPHARMA` is already present."
+    )
 
 
 def test_tracker_delete_removes_the_matching_entry() -> None:

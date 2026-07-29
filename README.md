@@ -90,6 +90,10 @@ the tracker:
 /swingengine tracker add SUNPHARMA
 ```
 
+Trading symbols received from Slack are normalized to uppercase before the
+NSE catalog lookup and database operation. Duplicate asset and tracker
+requests are left unchanged and reported as already present.
+
 `asset list` shows saved names, trading symbols, and instrument keys.
 `tracker list` joins tracked rows to their asset names and symbols. An asset
 must be removed from the tracker before it can be deleted from the saved asset
@@ -109,7 +113,9 @@ the writable persistent path `/var/lib/swingengine/files`. Override either
 with `SWINGENGINE_FILES_DIR`. The input directory is reserved for future import
 commands. CSV snapshots are written atomically to `output/asset-list.csv` and
 `output/tracker-list.csv` before being uploaded. Empty lists produce a CSV
-containing only its column headings.
+containing only its column headings. Tracker exports contain the asset name,
+trading symbol, momentum/order/approval flags, allocated amount, and added
+date; internal tracker and asset IDs are omitted.
 
 The defaults work with the persistent volume described below. They can be
 overridden when needed:

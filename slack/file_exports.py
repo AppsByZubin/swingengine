@@ -126,18 +126,22 @@ class CsvFileExporter:
         path = self._write_csv(
             "tracker-list.csv",
             (
-                "tracker_details_id",
-                "asset_id",
                 "asset_name",
                 "trading_symbol",
+                "has_momentum",
+                "is_order_created",
+                "is_approved_for_order",
+                "amount_allocated",
                 "added_date",
             ),
             (
                 (
-                    entry.tracker_details_id,
-                    entry.asset_id,
                     entry.asset_name,
                     entry.trading_symbol,
+                    entry.has_momentum,
+                    entry.is_order_created,
+                    entry.is_approved_for_order,
+                    entry.amount_allocated,
                     entry.added_date.isoformat(),
                 )
                 for entry in entries

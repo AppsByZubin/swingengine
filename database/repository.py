@@ -52,6 +52,10 @@ class TrackerEntry:
     asset_id: int
     asset_name: str
     trading_symbol: str
+    has_momentum: bool
+    is_order_created: bool
+    is_approved_for_order: bool
+    amount_allocated: float
     added_date: date
 
 
@@ -166,7 +170,14 @@ class AssetTrackerRepository:
                     FROM public.assets
                     WHERE upper(trading_symbol) = upper(%s)
                     ON CONFLICT (asset_id) DO NOTHING
-                    RETURNING tracker_details_id, asset_id, added_date
+                    RETURNING
+                        tracker_details_id,
+                        asset_id,
+                        has_momentum,
+                        is_order_created,
+                        is_approved_for_order,
+                        amount_allocated,
+                        added_date
                     """,
                     (trading_symbol,),
                 ).fetchone()
@@ -215,7 +226,11 @@ class AssetTrackerRepository:
             asset_id=int(row[1]),
             asset_name=str(asset_row[0]),
             trading_symbol=str(asset_row[1]),
-            added_date=row[2],
+            has_momentum=bool(row[2]),
+            is_order_created=bool(row[3]),
+            is_approved_for_order=bool(row[4]),
+            amount_allocated=float(row[5]),
+            added_date=row[6],
         )
 
     def delete_tracker(self, trading_symbol: str) -> TrackerEntry:
@@ -232,6 +247,10 @@ class AssetTrackerRepository:
                         tracker.asset_id,
                         asset.asset_name,
                         asset.trading_symbol,
+                        tracker.has_momentum,
+                        tracker.is_order_created,
+                        tracker.is_approved_for_order,
+                        tracker.amount_allocated,
                         tracker.added_date
                     """,
                     (trading_symbol,),
@@ -259,6 +278,10 @@ class AssetTrackerRepository:
                         tracker.asset_id,
                         asset.asset_name,
                         asset.trading_symbol,
+                        tracker.has_momentum,
+                        tracker.is_order_created,
+                        tracker.is_approved_for_order,
+                        tracker.amount_allocated,
                         tracker.added_date
                     FROM public.tracker AS tracker
                     JOIN public.assets AS asset
@@ -293,5 +316,9 @@ def _tracker_entry(row: tuple[Any, ...]) -> TrackerEntry:
         asset_id=int(row[1]),
         asset_name=str(row[2]),
         trading_symbol=str(row[3]),
-        added_date=row[4],
+        has_momentum=bool(row[4]),
+        is_order_created=bool(row[5]),
+        is_approved_for_order=bool(row[6]),
+        amount_allocated=float(row[7]),
+        added_date=row[8],
     )

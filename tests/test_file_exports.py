@@ -86,6 +86,10 @@ def test_tracker_csv_contains_database_fields(tmp_path) -> None:
                 asset_id=42,
                 asset_name="SUN PHARMACEUTICAL IND L",
                 trading_symbol="SUNPHARMA",
+                has_momentum=True,
+                is_order_created=False,
+                is_approved_for_order=True,
+                amount_allocated=12500.5,
                 added_date=date(2026, 7, 28),
             )
         ]
@@ -97,13 +101,23 @@ def test_tracker_csv_contains_database_fields(tmp_path) -> None:
     assert upload.path == tmp_path / "tracker-list.csv"
     assert rows == [
         [
-            "tracker_details_id",
-            "asset_id",
             "asset_name",
             "trading_symbol",
+            "has_momentum",
+            "is_order_created",
+            "is_approved_for_order",
+            "amount_allocated",
             "added_date",
         ],
-        ["7", "42", "SUN PHARMACEUTICAL IND L", "SUNPHARMA", "2026-07-28"],
+        [
+            "SUN PHARMACEUTICAL IND L",
+            "SUNPHARMA",
+            "True",
+            "False",
+            "True",
+            "12500.5",
+            "2026-07-28",
+        ],
     ]
 
 

@@ -218,7 +218,7 @@ def asset_command(
                 "`/swingengine asset add <trading_symbol>`."
             )
 
-        symbol = parts[1].strip()
+        symbol = _normalize_trading_symbol(parts[1])
         try:
             matches = asset_service.search(symbol)
         except AssetCatalogError as error:
@@ -241,7 +241,8 @@ def asset_command(
             saved_asset = tracker_service.add_asset(asset)
         except AssetAlreadyExistsError:
             return ephemeral(
-                f"Asset `{_code_text(asset.trading_symbol)}` is already saved."
+                f"Asset `{_code_text(asset.trading_symbol)}` is already "
+                "present."
             )
         except RepositoryError as error:
             return ephemeral(f":warning: {error}")
@@ -259,7 +260,7 @@ def asset_command(
                 "`/swingengine asset delete <trading_symbol>`."
             )
 
-        symbol = parts[1].strip()
+        symbol = _normalize_trading_symbol(parts[1])
         try:
             deleted_asset = tracker_service.delete_asset(symbol)
         except AssetNotFoundError:
@@ -331,7 +332,7 @@ def tracker_command(
                 "Provide a trading symbol: "
                 "`/swingengine tracker add <trading_symbol>`."
             )
-        symbol = parts[1].strip()
+        symbol = _normalize_trading_symbol(parts[1])
         try:
             entry = tracker_service.add_tracker(symbol)
         except AssetNotFoundError:
@@ -340,7 +341,7 @@ def tracker_command(
             )
         except TrackerAlreadyExistsError:
             return ephemeral(
-                f"Asset `{_code_text(symbol)}` is already tracked."
+                f"Asset `{_code_text(symbol)}` is already present."
             )
         except RepositoryError as error:
             return ephemeral(f":warning: {error}")
@@ -356,7 +357,7 @@ def tracker_command(
                 "Provide a trading symbol: "
                 "`/swingengine tracker delete <trading_symbol>`."
             )
-        symbol = parts[1].strip()
+        symbol = _normalize_trading_symbol(parts[1])
         try:
             entry = tracker_service.delete_tracker(symbol)
         except TrackerNotFoundError:
@@ -451,6 +452,11 @@ def _format_tracker(entry: TrackerEntry) -> str:
         f"• `{_code_text(entry.trading_symbol)}`{detail} · added "
         f"{entry.added_date.isoformat()}"
     )
+
+
+def _normalize_trading_symbol(value: str) -> str:
+    """Normalize Slack trading symbols to the NSE catalog representation."""
+    return value.strip().upper()
 
 
 def _slack_text(value: str) -> str:
