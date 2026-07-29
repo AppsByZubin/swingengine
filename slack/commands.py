@@ -24,6 +24,7 @@ from upstox.assets import AssetCatalogError, AssetSearchResult
 SlackResponse = dict[str, Any]
 CommandHandler = Callable[[str], SlackResponse]
 FILE_UPLOAD_KEY = "_file_upload"
+ASSET_IMPORT_MODAL_KEY = "_asset_import_modal"
 
 
 class TokenAuthService(Protocol):
@@ -76,6 +77,15 @@ def file_upload_response(text: str, upload: SlackFileUpload) -> SlackResponse:
     }
 
 
+def asset_import_modal_response(text: str) -> SlackResponse:
+    """Request that the Slack adapter open the asset CSV upload modal."""
+    return {
+        "response_type": "ephemeral",
+        "text": text,
+        ASSET_IMPORT_MODAL_KEY: True,
+    }
+
+
 def help_command(_: str = "") -> SlackResponse:
     return ephemeral(
         "*SwingEngine commands*\n\n"
@@ -95,7 +105,8 @@ def help_command(_: str = "") -> SlackResponse:
         "• `/swingengine asset delete <trading_symbol>` — delete a saved "
         "asset\n"
         "• `/swingengine asset list` — list saved assets\n"
-        "• `/swingengine asset list file` — return saved assets as CSV\n\n"
+        "• `/swingengine asset list file` — return saved assets as CSV\n"
+        "• `/swingengine asset upload` — upload an add/delete CSV\n\n"
         "*Tracker*\n"
         "• `/swingengine tracker add <trading_symbol>` — start tracking a "
         "saved asset\n"
@@ -310,9 +321,14 @@ def asset_command(
             )
         )
 
+    if action == "upload":
+        if len(parts) != 1:
+            return ephemeral("Use `/swingengine asset upload`.")
+        return asset_import_modal_response("Opening the asset CSV upload dialog.")
+
     return ephemeral(
         "Unknown asset action. Use "
-        "`/swingengine asset add|delete|list ...`."
+        "`/swingengine asset add|delete|list|upload ...`."
     )
 
 

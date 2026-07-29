@@ -1,9 +1,17 @@
 import logging
 from typing import Any
 
-from slack.app import _redact_sensitive_command, handle_slash_command
+from slack.app import (
+    ASSET_IMPORT_ACTION_ID,
+    ASSET_IMPORT_BLOCK_ID,
+    ASSET_IMPORT_CALLBACK_ID,
+    _redact_sensitive_command,
+    handle_asset_import_submission,
+    handle_slash_command,
+)
 from slack.commands import CommandRouter, build_router, file_upload_response
 from slack.file_exports import SlackFileUpload
+from slack.file_imports import AssetImportSummary
 
 
 def test_slash_command_is_acknowledged_before_response() -> None:
@@ -124,3 +132,94 @@ def test_file_response_is_uploaded_to_command_channel(tmp_path) -> None:
         "respond",
         {"response_type": "ephemeral", "text": "CSV uploaded."},
     )
+
+
+def test_asset_upload_command_opens_a_csv_file_modal() -> None:
+    calls: list[tuple[str, Any]] = []
+
+    class FakeClient:
+        def views_open(self, **arguments: Any) -> None:
+            calls.append(("modal", arguments))
+
+    handle_slash_command(
+        lambda: calls.append(("ack", None)),
+        lambda message: calls.append(("respond", message)),
+        {
+            "command": "/swingengine",
+            "text": "asset upload",
+            "channel_id": "C456",
+            "user_id": "U123",
+            "trigger_id": "trigger-123",
+        },
+        build_router(),
+        client=FakeClient(),
+        asset_importer=object(),  # type: ignore[arg-type]
+    )
+
+    assert calls[0] == ("ack", None)
+    assert calls[1][0] == "modal"
+    assert calls[1][1]["trigger_id"] == "trigger-123"
+    modal = calls[1][1]["view"]
+    assert modal["callback_id"] == ASSET_IMPORT_CALLBACK_ID
+    assert modal["private_metadata"] == "C456"
+    file_input = modal["blocks"][1]["element"]
+    assert file_input == {
+        "type": "file_input",
+        "action_id": ASSET_IMPORT_ACTION_ID,
+        "filetypes": ["csv"],
+        "max_files": 1,
+    }
+    assert calls[2][0] == "respond"
+
+
+def test_asset_upload_submission_imports_and_sends_private_summary() -> None:
+    calls: list[tuple[str, Any]] = []
+    uploaded_file = {"id": "F123", "name": "assets.csv"}
+
+    class FakeImporter:
+        def import_slack_file(
+            self,
+            file: dict[str, Any],
+            client: Any,
+        ) -> AssetImportSummary:
+            assert file == uploaded_file
+            assert isinstance(client, FakeClient)
+            return AssetImportSummary(
+                total=2,
+                added=1,
+                deleted=1,
+                already_present=0,
+                failed=0,
+                issues=(),
+            )
+
+    class FakeClient:
+        def chat_postEphemeral(self, **arguments: Any) -> None:
+            calls.append(("message", arguments))
+
+    handle_asset_import_submission(
+        lambda: calls.append(("ack", None)),
+        {"user": {"id": "U123"}},
+        {
+            "private_metadata": "C456",
+            "state": {
+                "values": {
+                    ASSET_IMPORT_BLOCK_ID: {
+                        ASSET_IMPORT_ACTION_ID: {
+                            "type": "file_input",
+                            "files": [uploaded_file],
+                        }
+                    }
+                }
+            },
+        },
+        FakeClient(),
+        FakeImporter(),  # type: ignore[arg-type]
+    )
+
+    assert calls[0] == ("ack", None)
+    assert calls[1][0] == "message"
+    assert calls[1][1]["channel"] == "C456"
+    assert calls[1][1]["user"] == "U123"
+    assert "Added: 1" in calls[1][1]["text"]
+    assert "Deleted: 1" in calls[1][1]["text"]

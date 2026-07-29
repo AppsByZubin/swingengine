@@ -52,6 +52,7 @@ except CSV exports, which it uploads to the conversation:
 /swingengine asset delete SUNPHARMA
 /swingengine asset list
 /swingengine asset list file
+/swingengine asset upload
 /swingengine tracker add SUNPHARMA
 /swingengine tracker delete SUNPHARMA
 /swingengine tracker list
@@ -107,11 +108,27 @@ Slack conversation:
 /swingengine tracker list file
 ```
 
+Use `/swingengine asset upload` to open a Slack file picker and apply asset
+adds and deletes in bulk. Upload one UTF-8 CSV of no more than 1 MB or 1,000
+data rows with exactly these columns:
+
+```csv
+name,action
+reliance,add
+tcs,delete
+infosys,add
+```
+
+Trading symbols are normalized to uppercase. Add rows must exactly match a
+symbol in the local NSE catalog. Existing assets are reported as already
+present; delete rows fail when the asset does not exist or is still tracked.
+The app sends the requesting user a private summary after processing all rows.
+
 At startup, SwingEngine creates `input` and `output` under its runtime file
 directory. Source-checkout runs default to `files`, while the container uses
 the writable persistent path `/var/lib/swingengine/files`. Override either
-with `SWINGENGINE_FILES_DIR`. The input directory is reserved for future import
-commands. CSV snapshots are written atomically to `output/asset-list.csv` and
+with `SWINGENGINE_FILES_DIR`. Uploaded asset CSVs are stored in `input`. CSV
+snapshots are written atomically to `output/asset-list.csv` and
 `output/tracker-list.csv` before being uploaded. Empty lists produce a CSV
 containing only its column headings. Tracker exports contain the asset name,
 trading symbol, momentum/order/approval flags, allocated amount, and added
@@ -165,11 +182,12 @@ storing it. The token is redacted from application logs. The state file is
 atomically replaced with mode `0600`; mount its parent directory on persistent,
 encrypted storage in production. Never log or commit the file.
 
-The Slack app needs the `chat:write`, `commands`, and `files:write` bot scopes.
-Reinstall it after applying the updated manifest. Add the SwingEngine bot to
-each channel where it should upload CSV files; private channels require an
-explicit invitation. `SLACK_ALERT_USER_ID` also controls which Slack user may
-run `auth set`.
+The Slack app needs the `chat:write`, `commands`, `files:read`, and
+`files:write` bot scopes. `files:read` is required for asset imports and
+`files:write` is required for list exports. Reinstall the app after applying
+the updated manifest. Add the SwingEngine bot to each channel where it should
+import or export CSV files; private channels require an explicit invitation.
+`SLACK_ALERT_USER_ID` also controls which Slack user may run `auth set`.
 
 The notifier-webhook implementation remains available for later use. It is
 inactive while `UPSTOX_TOKEN_ROTATION_ENABLED` and `UPSTOX_WEBHOOK_ENABLED`

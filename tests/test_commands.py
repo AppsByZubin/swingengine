@@ -127,6 +127,7 @@ def test_help_lists_every_supported_command_and_disabled_workflow() -> None:
         "• `/swingengine asset add <trading_symbol>`",
         "• `/swingengine asset delete <trading_symbol>`",
         "• `/swingengine asset list`",
+        "• `/swingengine asset upload`",
         "• `/swingengine tracker add <trading_symbol>`",
         "• `/swingengine tracker delete <trading_symbol>`",
         "• `/swingengine tracker list`",
@@ -305,6 +306,14 @@ def test_asset_list_file_requests_a_csv_upload(tmp_path) -> None:
     assert isinstance(upload, SlackFileUpload)
     assert upload.path == tmp_path / "asset-list.csv"
     assert response["text"] == ":white_check_mark: Saved assets CSV uploaded."
+
+
+def test_asset_upload_requests_the_slack_file_modal() -> None:
+    response = build_router().dispatch("asset upload")
+
+    assert response["response_type"] == "ephemeral"
+    assert response["text"] == "Opening the asset CSV upload dialog."
+    assert response["_asset_import_modal"] is True
 
 
 def test_tracker_add_matches_a_saved_asset() -> None:
