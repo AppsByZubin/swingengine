@@ -103,11 +103,13 @@ Slack conversation:
 /swingengine tracker list file
 ```
 
-At startup, SwingEngine creates `files/input` and `files/output`. The input
-directory is reserved for future import commands. CSV snapshots are written
-atomically to `files/output/asset-list.csv` and
-`files/output/tracker-list.csv` before being uploaded. Empty lists produce a
-CSV containing only its column headings.
+At startup, SwingEngine creates `input` and `output` under its runtime file
+directory. Source-checkout runs default to `files`, while the container uses
+the writable persistent path `/var/lib/swingengine/files`. Override either
+with `SWINGENGINE_FILES_DIR`. The input directory is reserved for future import
+commands. CSV snapshots are written atomically to `output/asset-list.csv` and
+`output/tracker-list.csv` before being uploaded. Empty lists produce a CSV
+containing only its column headings.
 
 The defaults work with the persistent volume described below. They can be
 overridden when needed:
@@ -248,7 +250,9 @@ docker run --rm \
 
 The container runs as the non-root user `10001:10001`. It needs outbound
 network access to Slack and Upstox. No inbound port or domain is required for
-the manual Slack workflow because commands use Slack Socket Mode.
+the manual Slack workflow because commands use Slack Socket Mode. Runtime CSV
+files are stored under `/var/lib/swingengine/files`, which must remain writable
+when the container root filesystem is read-only.
 
 The GitHub Actions workflow publishes `bizzkpm/swingengine` to Docker Hub and
 updates `helm/swingengine/values.yaml` in the `AppsByZubin/botyard` repository.

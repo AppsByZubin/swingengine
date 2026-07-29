@@ -7,13 +7,14 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any
+from typing import Any, Mapping
 
 from database.repository import AssetRecord, TrackerEntry
 
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_FILES_DIRECTORY = Path(__file__).resolve().parent.parent / "files"
+FILES_DIRECTORY_ENVIRONMENT_VARIABLE = "SWINGENGINE_FILES_DIR"
 
 
 class FileStorageError(RuntimeError):
@@ -22,6 +23,22 @@ class FileStorageError(RuntimeError):
 
 class FileExportError(RuntimeError):
     """Raised when SwingEngine cannot generate a requested export."""
+
+
+def configured_files_directory(
+    env: Mapping[str, str] | None = None,
+) -> Path:
+    """Return the runtime file root configured for this process."""
+    values = os.environ if env is None else env
+    configured_path = values.get(
+        FILES_DIRECTORY_ENVIRONMENT_VARIABLE,
+        "",
+    ).strip()
+    return (
+        Path(configured_path)
+        if configured_path
+        else DEFAULT_FILES_DIRECTORY
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,9 +59,24 @@ class FileDirectories:
         try:
             input_directory.mkdir(parents=True, exist_ok=True)
             output_directory.mkdir(parents=True, exist_ok=True)
+            for directory in (input_directory, output_directory):
+                with NamedTemporaryFile(
+                    prefix=".swingengine-write-test-",
+                    dir=directory,
+                ):
+                    pass
         except OSError as error:
+            LOGGER.exception(
+                "File directory is unavailable or read-only root=%s "
+                "input=%s output=%s",
+                root_path,
+                input_directory,
+                output_directory,
+            )
             raise FileStorageError(
-                f"Unable to initialize file directories under {root_path}."
+                f"File directory {root_path} is unavailable or read-only. "
+                f"Set {FILES_DIRECTORY_ENVIRONMENT_VARIABLE} to a writable "
+                "location."
             ) from error
         return cls(input=input_directory, output=output_directory)
 

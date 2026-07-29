@@ -5,7 +5,21 @@ from typing import Any
 
 import pytest
 from database.repository import AssetRecord, TrackerEntry
-from slack.file_exports import CsvFileExporter, FileDirectories, FileExportError
+from slack.file_exports import (
+    DEFAULT_FILES_DIRECTORY,
+    CsvFileExporter,
+    FileDirectories,
+    FileExportError,
+    FileStorageError,
+    configured_files_directory,
+)
+
+
+def test_file_directory_uses_environment_override(tmp_path) -> None:
+    assert configured_files_directory({}) == DEFAULT_FILES_DIRECTORY
+    assert configured_files_directory(
+        {"SWINGENGINE_FILES_DIR": f"  {tmp_path}  "}
+    ) == tmp_path
 
 
 def test_file_directories_are_created_idempotently(tmp_path) -> None:
@@ -17,6 +31,22 @@ def test_file_directories_are_created_idempotently(tmp_path) -> None:
     assert first == second
     assert first.input.is_dir()
     assert first.output.is_dir()
+
+
+def test_file_directories_reject_a_read_only_location(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    def reject_write(*args, **kwargs):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(
+        "slack.file_exports.NamedTemporaryFile",
+        reject_write,
+    )
+
+    with pytest.raises(FileStorageError, match="SWINGENGINE_FILES_DIR"):
+        FileDirectories.create(tmp_path / "files")
 
 
 def test_asset_csv_contains_database_fields(tmp_path) -> None:

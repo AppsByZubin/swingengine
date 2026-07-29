@@ -16,6 +16,7 @@ from slack.file_exports import (
     CsvFileExporter,
     FileDirectories,
     SlackFileUpload,
+    configured_files_directory,
 )
 from slack.notifier import SlackTokenNotifier
 from upstox.assets import AssetCatalog, AssetCatalogSettings
@@ -161,7 +162,7 @@ def run() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    file_directories = FileDirectories.create()
+    file_directories = FileDirectories.create(configured_files_directory())
     file_exporter = CsvFileExporter(file_directories.output)
     LOGGER.info(
         "Initialized file directories input=%s output=%s",
