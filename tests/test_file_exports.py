@@ -1,8 +1,11 @@
 import csv
+import logging
 from datetime import date
+from typing import Any
 
+import pytest
 from database.repository import AssetRecord, TrackerEntry
-from slack.file_exports import CsvFileExporter, FileDirectories
+from slack.file_exports import CsvFileExporter, FileDirectories, FileExportError
 
 
 def test_file_directories_are_created_idempotently(tmp_path) -> None:
@@ -98,3 +101,39 @@ def test_export_escapes_spreadsheet_formula_cells(tmp_path) -> None:
         rows = list(csv.reader(exported_file))
 
     assert rows[1] == ["1", "'=DANGEROUS()", "'+SYMBOL", "'@KEY"]
+
+
+def test_successful_export_logs_start_and_completion(
+    tmp_path, caplog: Any
+) -> None:
+    with caplog.at_level(logging.INFO, logger="slack.file_exports"):
+        CsvFileExporter(tmp_path).export_assets([])
+
+    assert (
+        f"Starting CSV export filename='asset-list.csv' "
+        f"output_directory={tmp_path} target={tmp_path / 'asset-list.csv'}"
+        in caplog.messages
+    )
+    assert (
+        f"Completed CSV export filename='asset-list.csv' "
+        f"target={tmp_path / 'asset-list.csv'}"
+        in caplog.messages
+    )
+
+
+def test_failed_export_logs_root_cause_and_paths(
+    tmp_path, caplog: Any
+) -> None:
+    output_directory = tmp_path / "output"
+    output_directory.write_text("not a directory", encoding="utf-8")
+
+    with (
+        caplog.at_level(logging.ERROR, logger="slack.file_exports"),
+        pytest.raises(FileExportError, match="Unable to generate asset-list.csv"),
+    ):
+        CsvFileExporter(output_directory).export_assets([])
+
+    assert "Unable to generate CSV export filename='asset-list.csv'" in caplog.text
+    assert f"output_directory={output_directory}" in caplog.text
+    assert f"target={output_directory / 'asset-list.csv'}" in caplog.text
+    assert "FileExistsError" in caplog.text

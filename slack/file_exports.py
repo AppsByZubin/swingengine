@@ -1,6 +1,7 @@
 """Local file storage and CSV exports for Slack commands."""
 
 import csv
+import logging
 import os
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -9,6 +10,8 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 from database.repository import AssetRecord, TrackerEntry
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_FILES_DIRECTORY = Path(__file__).resolve().parent.parent / "files"
 
@@ -122,6 +125,12 @@ class CsvFileExporter:
     ) -> Path:
         target = self._output_directory / filename
         temporary_path: Path | None = None
+        LOGGER.info(
+            "Starting CSV export filename=%r output_directory=%s target=%s",
+            filename,
+            self._output_directory,
+            target,
+        )
         try:
             self._output_directory.mkdir(parents=True, exist_ok=True)
             with NamedTemporaryFile(
@@ -142,14 +151,30 @@ class CsvFileExporter:
                 )
             os.replace(temporary_path, target)
         except (csv.Error, OSError) as error:
+            LOGGER.exception(
+                "Unable to generate CSV export filename=%r "
+                "output_directory=%s target=%s temporary_path=%s",
+                filename,
+                self._output_directory,
+                target,
+                temporary_path,
+            )
             if temporary_path is not None:
                 try:
                     temporary_path.unlink(missing_ok=True)
                 except OSError:
-                    pass
+                    LOGGER.exception(
+                        "Unable to remove failed CSV export temporary file path=%s",
+                        temporary_path,
+                    )
             raise FileExportError(
                 f"Unable to generate {filename}."
             ) from error
+        LOGGER.info(
+            "Completed CSV export filename=%r target=%s",
+            filename,
+            target,
+        )
         return target
 
 
