@@ -1,0 +1,39 @@
+from datetime import time
+
+import pytest
+
+from tracker.config import (
+    TrackerEvaluationConfigurationError,
+    TrackerEvaluationSettings,
+)
+
+
+def test_tracker_evaluation_defaults_to_weekday_post_market_settings() -> None:
+    settings = TrackerEvaluationSettings.from_env({})
+
+    assert settings.enabled
+    assert settings.evaluation_time == time(hour=16)
+    assert settings.timezone_name == "Asia/Kolkata"
+    assert settings.lookback_days == 200
+    assert settings.ema_angle_threshold == 70
+    assert settings.sma_angle_threshold == 50
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("SWINGENGINE_TRACKER_EVALUATION_ENABLED", "sometimes"),
+        ("SWINGENGINE_TRACKER_EVALUATION_TIME", "after close"),
+        ("SWINGENGINE_TRACKER_EVALUATION_TIME", "16:00+05:30"),
+        ("SWINGENGINE_TRACKER_EVALUATION_TIMEZONE", "Mars/Olympus"),
+        ("SWINGENGINE_TRACKER_EVALUATION_LOOKBACK_DAYS", "0"),
+        ("SWINGENGINE_TRACKER_EMA_ANGLE_THRESHOLD", "steep"),
+        ("SWINGENGINE_TRACKER_EMA_ANGLE_THRESHOLD", "nan"),
+    ],
+)
+def test_invalid_tracker_evaluation_configuration_is_rejected(
+    name: str,
+    value: str,
+) -> None:
+    with pytest.raises(TrackerEvaluationConfigurationError):
+        TrackerEvaluationSettings.from_env({name: value})

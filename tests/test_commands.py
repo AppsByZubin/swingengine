@@ -106,6 +106,14 @@ class FailingAssetService:
         raise AssetCatalogError("Catalog is missing.")
 
 
+class FakeEvaluationService:
+    def evaluate_message(self) -> str:
+        return (
+            ":white_check_mark: Tracker asset evaluation completed for "
+            "2 asset(s)."
+        )
+
+
 def test_empty_command_shows_help() -> None:
     response = build_router().dispatch("")
 
@@ -130,6 +138,7 @@ def test_help_lists_every_supported_command_and_disabled_workflow() -> None:
         "• `/swingengine asset upload`",
         "• `/swingengine tracker add <trading_symbol>`",
         "• `/swingengine tracker delete <trading_symbol>`",
+        "• `/swingengine tracker asset evaluate`",
         "• `/swingengine tracker list`",
         "• `/swingengine auth request`",
     )
@@ -395,6 +404,27 @@ def test_tracker_list_file_requests_a_csv_upload(tmp_path) -> None:
     assert isinstance(upload, SlackFileUpload)
     assert upload.path == tmp_path / "tracker-list.csv"
     assert response["text"] == ":white_check_mark: Tracker CSV uploaded."
+
+
+def test_tracker_asset_evaluate_runs_the_momentum_screen() -> None:
+    response = build_router(
+        evaluation_service=FakeEvaluationService()
+    ).dispatch("tracker asset evaluate")
+
+    assert response == ephemeral(
+        ":white_check_mark: Tracker asset evaluation completed for 2 asset(s)."
+    )
+
+
+def test_tracker_asset_evaluate_requires_exact_command_and_service() -> None:
+    router = build_router()
+
+    assert "not configured" in router.dispatch(
+        "tracker asset evaluate"
+    )["text"]
+    assert "tracker asset evaluate" in router.dispatch(
+        "tracker asset refresh"
+    )["text"]
 
 
 def test_list_file_requires_csv_export_configuration() -> None:

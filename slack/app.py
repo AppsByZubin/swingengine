@@ -26,6 +26,9 @@ from slack.file_exports import (
 )
 from slack.file_imports import AssetImportError, CsvAssetImporter
 from slack.notifier import SlackTokenNotifier
+from tracker.config import TrackerEvaluationSettings
+from tracker.evaluator import TrackerMomentumEvaluator
+from tracker.scheduler import TrackerEvaluationScheduler
 from upstox.assets import AssetCatalog, AssetCatalogSettings
 from upstox.client import UpstoxAuthClient
 from upstox.config import UpstoxSettings
@@ -385,6 +388,7 @@ def run() -> None:
     upstox_settings = UpstoxSettings.from_env()
     asset_settings = AssetCatalogSettings.from_env()
     database_settings = DatabaseSettings.from_env()
+    tracker_evaluation_settings = TrackerEvaluationSettings.from_env()
     logging.basicConfig(
         level=settings.log_level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -404,6 +408,12 @@ def run() -> None:
     )
     asset_catalog = AssetCatalog(asset_settings)
     asset_tracker_repository = AssetTrackerRepository(database_settings)
+    tracker_evaluator = TrackerMomentumEvaluator(
+        tracker_evaluation_settings,
+        asset_tracker_repository,
+        auth_client,
+        token_store,
+    )
     asset_importer = CsvAssetImporter(
         file_directories.input,
         asset_catalog,
@@ -417,6 +427,7 @@ def run() -> None:
             asset_catalog,
             asset_tracker_repository,
             file_exporter,
+            tracker_evaluator,
         ),
         asset_importer,
     )
@@ -430,6 +441,10 @@ def run() -> None:
         notifier.notify,
     )
     scheduler = TokenRequestScheduler(upstox_settings, token_service)
+    tracker_scheduler = TrackerEvaluationScheduler(
+        tracker_evaluation_settings,
+        tracker_evaluator,
+    )
     webhook = UpstoxWebhookServer(upstox_settings, token_service)
 
     LOGGER.info("Starting Slack listener for %s", settings.slash_command)
@@ -441,10 +456,12 @@ def run() -> None:
 
     webhook.start()
     scheduler.start()
+    tracker_scheduler.start()
     monitor.start()
     try:
         SocketModeHandler(slack_app, settings.app_token).start()
     finally:
         monitor.stop()
+        tracker_scheduler.stop()
         scheduler.stop()
         webhook.stop()

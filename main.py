@@ -5,6 +5,7 @@ import logging
 from database.config import DatabaseConfigurationError
 from slack.app import run as run_slack
 from slack.config import ConfigurationError
+from tracker.config import TrackerEvaluationConfigurationError
 from upstox.assets import AssetConfigurationError
 from upstox.config import UpstoxConfigurationError
 
@@ -19,6 +20,7 @@ def main() -> int:
         DatabaseConfigurationError,
         UpstoxConfigurationError,
         AssetConfigurationError,
+        TrackerEvaluationConfigurationError,
     ) as error:
         print(f"Configuration error: {error}")
         return 2

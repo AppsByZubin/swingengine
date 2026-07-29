@@ -63,6 +63,11 @@ class AssetTrackerService(Protocol):
         """Return tracker entries joined with their saved assets."""
 
 
+class TrackerEvaluationService(Protocol):
+    def evaluate_message(self) -> str:
+        """Run the tracker momentum screen and return a Slack summary."""
+
+
 def ephemeral(text: str) -> SlackResponse:
     """Build a response visible only to the user who ran the command."""
     return {"response_type": "ephemeral", "text": text}
@@ -112,6 +117,8 @@ def help_command(_: str = "") -> SlackResponse:
         "saved asset\n"
         "• `/swingengine tracker delete <trading_symbol>` — stop tracking a "
         "saved asset\n"
+        "• `/swingengine tracker asset evaluate` — evaluate saved and pending "
+        "tracker assets now\n"
         "• `/swingengine tracker list` — list tracked assets\n"
         "• `/swingengine tracker list file` — return tracked assets as CSV\n\n"
         "*Disabled workflow*\n"
@@ -336,12 +343,22 @@ def tracker_command(
     arguments: str = "",
     tracker_service: AssetTrackerService | None = None,
     file_exporter: CsvFileExporter | None = None,
+    evaluation_service: TrackerEvaluationService | None = None,
 ) -> SlackResponse:
+    parts = arguments.strip().split(maxsplit=1)
+    action = parts[0].casefold() if parts else ""
+    if action == "asset":
+        if len(parts) != 2 or parts[1].strip().casefold() != "evaluate":
+            return ephemeral(
+                "Use `/swingengine tracker asset evaluate`."
+            )
+        if evaluation_service is None:
+            return ephemeral("Tracker asset evaluation is not configured.")
+        return ephemeral(evaluation_service.evaluate_message())
+
     if tracker_service is None:
         return ephemeral("Asset tracker database is not configured.")
 
-    parts = arguments.strip().split(maxsplit=1)
-    action = parts[0].casefold() if parts else ""
     if action == "add":
         if len(parts) != 2 or not parts[1].strip():
             return ephemeral(
@@ -418,7 +435,8 @@ def tracker_command(
 
     return ephemeral(
         "Unknown tracker action. Use "
-        "`/swingengine tracker add|delete|list ...`."
+        "`/swingengine tracker add|delete|list ...` or "
+        "`/swingengine tracker asset evaluate`."
     )
 
 
@@ -518,6 +536,7 @@ def build_router(
     asset_service: AssetService | None = None,
     tracker_service: AssetTrackerService | None = None,
     file_exporter: CsvFileExporter | None = None,
+    evaluation_service: TrackerEvaluationService | None = None,
 ) -> CommandRouter:
     router = CommandRouter()
     router.register("help", help_command)
@@ -549,6 +568,7 @@ def build_router(
             arguments,
             tracker_service,
             file_exporter,
+            evaluation_service,
         ),
     )
     return router

@@ -17,6 +17,9 @@ class RowsResult:
     def fetchall(self) -> list[tuple[Any, ...]]:
         return self._rows
 
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self._rows[0] if self._rows else None
+
 
 class StubConnection:
     def __init__(self, rows: list[tuple[Any, ...]]) -> None:
@@ -100,3 +103,78 @@ def test_list_tracker_returns_all_exported_state_fields() -> None:
     assert entries[0].added_date == date(2026, 7, 28)
     assert "tracker.has_momentum" in connection.query
     assert "tracker.amount_allocated" in connection.query
+
+
+def test_list_momentum_candidates_includes_untracked_and_pending_assets() -> None:
+    connection = StubConnection(
+        [
+            (
+                42,
+                "SUN PHARMACEUTICAL IND L",
+                "SUNPHARMA",
+                "NSE_EQ|INE044A01036",
+                None,
+            ),
+            (
+                43,
+                "TATA CONSULTANCY SERVICES",
+                "TCS",
+                "NSE_EQ|INE467B01029",
+                9,
+            ),
+        ]
+    )
+    repository = AssetTrackerRepository(
+        DatabaseSettings(database_url="postgresql:///swingengine"),
+        connect=lambda *_args, **_kwargs: connection,
+    )
+
+    candidates = repository.list_momentum_candidates()
+
+    assert [candidate.trading_symbol for candidate in candidates] == [
+        "SUNPHARMA",
+        "TCS",
+    ]
+    assert candidates[0].tracker_details_id is None
+    assert candidates[1].tracker_details_id == 9
+    assert "LEFT JOIN public.tracker" in connection.query
+    assert "tracker.is_order_created = FALSE" in connection.query
+
+
+def test_qualifying_momentum_is_upserted_with_requested_tracker_state() -> None:
+    connection = StubConnection([(7,)])
+    repository = AssetTrackerRepository(
+        DatabaseSettings(database_url="postgresql:///swingengine"),
+        connect=lambda *_args, **_kwargs: connection,
+    )
+
+    persisted = repository.record_momentum_evaluation(
+        42,
+        True,
+        date(2026, 7, 30),
+    )
+
+    assert persisted
+    assert "ON CONFLICT (asset_id) DO UPDATE" in connection.query
+    assert "has_momentum = TRUE" in connection.query
+    assert "is_order_created = FALSE" in connection.query
+    assert "is_approved_for_order = FALSE" in connection.query
+
+
+def test_nonqualifying_pending_momentum_is_cleared_without_insert() -> None:
+    connection = StubConnection([(7,)])
+    repository = AssetTrackerRepository(
+        DatabaseSettings(database_url="postgresql:///swingengine"),
+        connect=lambda *_args, **_kwargs: connection,
+    )
+
+    persisted = repository.record_momentum_evaluation(
+        42,
+        False,
+        date(2026, 7, 30),
+    )
+
+    assert persisted
+    assert "UPDATE public.tracker" in connection.query
+    assert "has_momentum = FALSE" in connection.query
+    assert "is_order_created = FALSE" in connection.query

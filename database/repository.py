@@ -59,6 +59,17 @@ class TrackerEntry:
     added_date: date
 
 
+@dataclass(frozen=True, slots=True)
+class MomentumCandidate:
+    """A saved asset eligible for insertion or pending-order reevaluation."""
+
+    asset_id: int
+    asset_name: str
+    trading_symbol: str
+    instrument_key: str | None
+    tracker_details_id: int | None
+
+
 Connect = Callable[..., Any]
 
 
@@ -294,6 +305,92 @@ class AssetTrackerRepository:
             raise RepositoryError("Unable to list tracker entries.") from error
         return [_tracker_entry(row) for row in rows]
 
+    def list_momentum_candidates(self) -> list[MomentumCandidate]:
+        """List untracked assets and tracked assets without a created order."""
+        try:
+            with self._connection() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT
+                        asset.asset_id,
+                        asset.asset_name,
+                        asset.trading_symbol,
+                        asset.instrument_key,
+                        tracker.tracker_details_id
+                    FROM public.assets AS asset
+                    LEFT JOIN public.tracker AS tracker
+                      ON tracker.asset_id = asset.asset_id
+                    WHERE tracker.tracker_details_id IS NULL
+                       OR tracker.is_order_created = FALSE
+                    ORDER BY asset.trading_symbol, asset.asset_id
+                    """
+                ).fetchall()
+        except psycopg.Error as error:
+            LOGGER.exception("Failed to list momentum evaluation candidates")
+            raise RepositoryError(
+                "Unable to list tracker evaluation assets."
+            ) from error
+        return [_momentum_candidate(row) for row in rows]
+
+    def record_momentum_evaluation(
+        self,
+        asset_id: int,
+        has_momentum: bool,
+        evaluation_date: date,
+    ) -> bool:
+        """Apply one evaluation without changing order-created tracker rows.
+
+        Qualifying untracked assets are inserted. Qualifying pending entries
+        are refreshed and reset to unapproved. Pending entries that no longer
+        qualify have their momentum and approval flags cleared.
+        """
+        try:
+            with self._connection() as connection:
+                if has_momentum:
+                    row = connection.execute(
+                        """
+                        INSERT INTO public.tracker AS current_tracker (
+                            asset_id,
+                            has_momentum,
+                            is_order_created,
+                            is_approved_for_order,
+                            added_date
+                        )
+                        VALUES (%s, TRUE, FALSE, FALSE, %s)
+                        ON CONFLICT (asset_id) DO UPDATE
+                        SET
+                            has_momentum = TRUE,
+                            is_order_created = FALSE,
+                            is_approved_for_order = FALSE,
+                            added_date = EXCLUDED.added_date
+                        WHERE current_tracker.is_order_created = FALSE
+                        RETURNING tracker_details_id
+                        """,
+                        (asset_id, evaluation_date),
+                    ).fetchone()
+                else:
+                    row = connection.execute(
+                        """
+                        UPDATE public.tracker
+                        SET
+                            has_momentum = FALSE,
+                            is_approved_for_order = FALSE
+                        WHERE asset_id = %s
+                          AND is_order_created = FALSE
+                        RETURNING tracker_details_id
+                        """,
+                        (asset_id,),
+                    ).fetchone()
+        except psycopg.Error as error:
+            LOGGER.exception(
+                "Failed to record momentum evaluation asset_id=%r",
+                asset_id,
+            )
+            raise RepositoryError(
+                "Unable to update tracker momentum."
+            ) from error
+        return row is not None
+
     def _connection(self) -> Any:
         return self._connect(
             self._settings.database_url,
@@ -321,4 +418,14 @@ def _tracker_entry(row: tuple[Any, ...]) -> TrackerEntry:
         is_approved_for_order=bool(row[6]),
         amount_allocated=float(row[7]),
         added_date=row[8],
+    )
+
+
+def _momentum_candidate(row: tuple[Any, ...]) -> MomentumCandidate:
+    return MomentumCandidate(
+        asset_id=int(row[0]),
+        asset_name=str(row[1]),
+        trading_symbol=str(row[2]),
+        instrument_key=None if row[3] is None else str(row[3]),
+        tracker_details_id=None if row[4] is None else int(row[4]),
     )

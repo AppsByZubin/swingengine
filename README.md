@@ -57,6 +57,7 @@ except CSV exports, which it uploads to the conversation:
 /swingengine tracker delete SUNPHARMA
 /swingengine tracker list
 /swingengine tracker list file
+/swingengine tracker asset evaluate
 ```
 
 ## NSE instrument search
@@ -133,6 +134,54 @@ snapshots are written atomically to `output/asset-list.csv` and
 containing only its column headings. Tracker exports contain the asset name,
 trading symbol, momentum/order/approval flags, allocated amount, and added
 date; internal tracker and asset IDs are omitted.
+
+## Tracker momentum evaluation
+
+At 4 PM `Asia/Kolkata` on weekdays, SwingEngine evaluates every saved asset
+that is not yet tracked and every tracked asset where
+`is_order_created = FALSE`. It requests the previous 200 calendar days of
+daily Upstox candles and combines the V3 historical response with the V3
+intraday daily candle so the current trading day is included.
+
+The calculation matches
+`visualizer/notebooks/swingengine/ema_crossover.ipynb`: EMA 21 uses
+`adjust=False`, SMA 50 is a rolling mean, and each angle is the arctangent of
+the average price-point slope over three bars, clipped to `[-10, 10]`.
+Momentum requires both strict conditions:
+
+```text
+ema_21_angle > 70
+sma_50_angle > 50
+```
+
+A qualifying untracked asset is inserted into `tracker`. A qualifying pending
+entry is refreshed. Both receive `has_momentum = TRUE`,
+`is_order_created = FALSE`, `is_approved_for_order = FALSE`, and the current
+date. A pending entry that no longer qualifies has momentum and approval
+cleared. Rows with a created order are not changed.
+
+Run the same evaluation on demand:
+
+```text
+/swingengine tracker asset evaluate
+```
+
+The scheduler is enabled by default. Its settings can be overridden:
+
+```bash
+export SWINGENGINE_TRACKER_EVALUATION_ENABLED=true
+export SWINGENGINE_TRACKER_EVALUATION_TIME=16:00
+export SWINGENGINE_TRACKER_EVALUATION_TIMEZONE=Asia/Kolkata
+export SWINGENGINE_TRACKER_EVALUATION_LOOKBACK_DAYS=200
+export SWINGENGINE_TRACKER_EMA_ANGLE_THRESHOLD=70
+export SWINGENGINE_TRACKER_SMA_ANGLE_THRESHOLD=50
+export SWINGENGINE_TRACKER_EVALUATION_RETRY_INTERVAL_SECONDS=300
+export SWINGENGINE_TRACKER_EVALUATION_POLL_INTERVAL_SECONDS=30
+```
+
+The evaluator uses the access token stored by the Upstox token-management
+workflow. Assets without an `instrument_key` are reported as failed and left
+unchanged.
 
 The defaults work with the persistent volume described below. They can be
 overridden when needed:
