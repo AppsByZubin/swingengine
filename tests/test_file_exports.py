@@ -1,0 +1,100 @@
+import csv
+from datetime import date
+
+from database.repository import AssetRecord, TrackerEntry
+from slack.file_exports import CsvFileExporter, FileDirectories
+
+
+def test_file_directories_are_created_idempotently(tmp_path) -> None:
+    root = tmp_path / "files"
+
+    first = FileDirectories.create(root)
+    second = FileDirectories.create(root)
+
+    assert first == second
+    assert first.input.is_dir()
+    assert first.output.is_dir()
+
+
+def test_asset_csv_contains_database_fields(tmp_path) -> None:
+    exporter = CsvFileExporter(tmp_path)
+    upload = exporter.export_assets(
+        [
+            AssetRecord(
+                asset_id=42,
+                asset_name="SUN PHARMACEUTICAL IND L",
+                trading_symbol="SUNPHARMA",
+                instrument_key="NSE_EQ|INE044A01036",
+            )
+        ]
+    )
+
+    with upload.path.open(encoding="utf-8", newline="") as exported_file:
+        rows = list(csv.reader(exported_file))
+
+    assert upload.path == tmp_path / "asset-list.csv"
+    assert rows == [
+        ["asset_id", "asset_name", "trading_symbol", "instrument_key"],
+        [
+            "42",
+            "SUN PHARMACEUTICAL IND L",
+            "SUNPHARMA",
+            "NSE_EQ|INE044A01036",
+        ],
+    ]
+
+
+def test_tracker_csv_contains_database_fields(tmp_path) -> None:
+    exporter = CsvFileExporter(tmp_path)
+    upload = exporter.export_tracker(
+        [
+            TrackerEntry(
+                tracker_details_id=7,
+                asset_id=42,
+                asset_name="SUN PHARMACEUTICAL IND L",
+                trading_symbol="SUNPHARMA",
+                added_date=date(2026, 7, 28),
+            )
+        ]
+    )
+
+    with upload.path.open(encoding="utf-8", newline="") as exported_file:
+        rows = list(csv.reader(exported_file))
+
+    assert upload.path == tmp_path / "tracker-list.csv"
+    assert rows == [
+        [
+            "tracker_details_id",
+            "asset_id",
+            "asset_name",
+            "trading_symbol",
+            "added_date",
+        ],
+        ["7", "42", "SUN PHARMACEUTICAL IND L", "SUNPHARMA", "2026-07-28"],
+    ]
+
+
+def test_empty_export_still_contains_csv_headings(tmp_path) -> None:
+    upload = CsvFileExporter(tmp_path).export_assets([])
+
+    assert upload.path.read_text(encoding="utf-8") == (
+        "asset_id,asset_name,trading_symbol,instrument_key\n"
+    )
+
+
+def test_export_escapes_spreadsheet_formula_cells(tmp_path) -> None:
+    upload = CsvFileExporter(tmp_path).export_assets(
+        [
+            AssetRecord(
+                asset_id=1,
+                asset_name="=DANGEROUS()",
+                trading_symbol="+SYMBOL",
+                instrument_key="@KEY",
+            )
+        ]
+    )
+
+    with upload.path.open(encoding="utf-8", newline="") as exported_file:
+        rows = list(csv.reader(exported_file))
+
+    assert rows[1] == ["1", "'=DANGEROUS()", "'+SYMBOL", "'@KEY"]

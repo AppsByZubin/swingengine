@@ -11,6 +11,7 @@ RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY main.py ./
 COPY database ./database
+COPY files ./files
 COPY slack ./slack
 COPY upstox ./upstox
 

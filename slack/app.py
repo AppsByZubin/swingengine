@@ -6,11 +6,17 @@ from typing import Any
 
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
+from slack_sdk.errors import SlackApiError, SlackClientError
 
 from database.config import DatabaseSettings
 from database.repository import AssetTrackerRepository
-from slack.commands import CommandRouter, build_router
+from slack.commands import FILE_UPLOAD_KEY, CommandRouter, build_router, ephemeral
 from slack.config import Settings
+from slack.file_exports import (
+    CsvFileExporter,
+    FileDirectories,
+    SlackFileUpload,
+)
 from slack.notifier import SlackTokenNotifier
 from upstox.assets import AssetCatalog, AssetCatalogSettings
 from upstox.client import UpstoxAuthClient
@@ -30,6 +36,7 @@ def handle_slash_command(
     command: Mapping[str, Any],
     router: CommandRouter,
     authorized_user_id: str = "",
+    client: Any = None,
 ) -> None:
     """Acknowledge Slack immediately, then route the command text."""
     ack()
@@ -53,7 +60,55 @@ def handle_slash_command(
             }
         )
         return
-    respond(router.dispatch(command_text))
+    response = dict(router.dispatch(command_text))
+    upload = response.pop(FILE_UPLOAD_KEY, None)
+    if upload is None:
+        respond(response)
+        return
+
+    if not isinstance(upload, SlackFileUpload):
+        LOGGER.error("Command returned an invalid Slack file upload request")
+        respond(ephemeral(":warning: Unable to prepare the CSV upload."))
+        return
+
+    channel_id = str(command.get("channel_id", "")).strip()
+    if client is None or not channel_id:
+        LOGGER.error(
+            "Cannot upload Slack file: client_available=%r channel_id=%r",
+            client is not None,
+            channel_id,
+        )
+        respond(ephemeral(":warning: Unable to upload the CSV to Slack."))
+        return
+
+    try:
+        client.files_upload_v2(
+            channel=channel_id,
+            file=str(upload.path),
+            filename=upload.path.name,
+            title=upload.title,
+            initial_comment=upload.initial_comment,
+        )
+    except SlackApiError as error:
+        error_code = str(error.response.get("error", "unknown_error"))
+        LOGGER.error(
+            "Slack rejected CSV upload channel_id=%r error=%r",
+            channel_id,
+            error_code,
+        )
+        respond(
+            ephemeral(
+                ":warning: Slack could not upload the CSV "
+                f"(`{error_code}`). Make sure SwingEngine is in this channel."
+            )
+        )
+        return
+    except (SlackClientError, OSError):
+        LOGGER.exception("Could not upload CSV to Slack channel_id=%r", channel_id)
+        respond(ephemeral(":warning: Unable to upload the CSV to Slack."))
+        return
+
+    respond(response)
 
 
 def _redact_sensitive_command(text: str) -> str:
@@ -76,13 +131,19 @@ def create_app(settings: Settings, router: CommandRouter | None = None) -> App:
     slack_app = App(token=settings.bot_token)
     command_router = router or build_router()
 
-    def listener(ack: Callable[[], Any], respond: Any, command: Any) -> None:
+    def listener(
+        ack: Callable[[], Any],
+        respond: Any,
+        command: Any,
+        client: Any,
+    ) -> None:
         handle_slash_command(
             ack,
             respond,
             command,
             command_router,
             settings.alert_user_id,
+            client,
         )
 
     slack_app.command(settings.slash_command)(listener)
@@ -100,6 +161,13 @@ def run() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    file_directories = FileDirectories.create()
+    file_exporter = CsvFileExporter(file_directories.output)
+    LOGGER.info(
+        "Initialized file directories input=%s output=%s",
+        file_directories.input,
+        file_directories.output,
+    )
     token_store = TokenStore(upstox_settings.token_file)
     auth_client = UpstoxAuthClient(upstox_settings)
     token_service = TokenRotationService(
@@ -113,6 +181,7 @@ def run() -> None:
             token_service,
             asset_catalog,
             asset_tracker_repository,
+            file_exporter,
         ),
     )
     notifier = SlackTokenNotifier(

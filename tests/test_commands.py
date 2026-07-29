@@ -10,6 +10,7 @@ from database.repository import (
     TrackerNotFoundError,
 )
 from slack.commands import CommandRouter, build_router, ephemeral
+from slack.file_exports import CsvFileExporter, SlackFileUpload
 from upstox.assets import AssetCatalogError, AssetSearchResult
 
 
@@ -284,6 +285,18 @@ def test_asset_list_shows_names_symbols_and_instrument_keys() -> None:
     assert "NSE_EQ|INE044A01036" in response["text"]
 
 
+def test_asset_list_file_requests_a_csv_upload(tmp_path) -> None:
+    response = build_router(
+        tracker_service=FakeAssetTrackerService(),
+        file_exporter=CsvFileExporter(tmp_path),
+    ).dispatch("asset list file")
+
+    upload = response["_file_upload"]
+    assert isinstance(upload, SlackFileUpload)
+    assert upload.path == tmp_path / "asset-list.csv"
+    assert response["text"] == ":white_check_mark: Saved assets CSV uploaded."
+
+
 def test_tracker_add_matches_a_saved_asset() -> None:
     tracker_service = FakeAssetTrackerService()
     response = build_router(
@@ -349,6 +362,25 @@ def test_tracker_list_shows_asset_name_symbol_and_added_date() -> None:
     assert "SUN PHARMACEUTICAL IND L" in response["text"]
     assert "SUNPHARMA" in response["text"]
     assert "2026-07-28" in response["text"]
+
+
+def test_tracker_list_file_requests_a_csv_upload(tmp_path) -> None:
+    response = build_router(
+        tracker_service=FakeAssetTrackerService(),
+        file_exporter=CsvFileExporter(tmp_path),
+    ).dispatch("tracker list file")
+
+    upload = response["_file_upload"]
+    assert isinstance(upload, SlackFileUpload)
+    assert upload.path == tmp_path / "tracker-list.csv"
+    assert response["text"] == ":white_check_mark: Tracker CSV uploaded."
+
+
+def test_list_file_requires_csv_export_configuration() -> None:
+    router = build_router(tracker_service=FakeAssetTrackerService())
+
+    assert "not configured" in router.dispatch("asset list file")["text"]
+    assert "not configured" in router.dispatch("tracker list file")["text"]
 
 
 def test_asset_command_rejects_unknown_action() -> None:

@@ -37,7 +37,8 @@ export SLACK_APP_TOKEN='xapp-...'
 python main.py
 ```
 
-The app responds privately to the user who invokes one of these commands:
+The app responds privately to the user who invokes one of these commands,
+except CSV exports, which it uploads to the conversation:
 
 ```text
 /swingengine help
@@ -50,9 +51,11 @@ The app responds privately to the user who invokes one of these commands:
 /swingengine asset add SUNPHARMA
 /swingengine asset delete SUNPHARMA
 /swingengine asset list
+/swingengine asset list file
 /swingengine tracker add SUNPHARMA
 /swingengine tracker delete SUNPHARMA
 /swingengine tracker list
+/swingengine tracker list file
 ```
 
 ## NSE instrument search
@@ -91,6 +94,20 @@ the tracker:
 `tracker list` joins tracked rows to their asset names and symbols. An asset
 must be removed from the tracker before it can be deleted from the saved asset
 table.
+
+Add `file` to either list command to generate a CSV file and upload it to the
+Slack conversation:
+
+```text
+/swingengine asset list file
+/swingengine tracker list file
+```
+
+At startup, SwingEngine creates `files/input` and `files/output`. The input
+directory is reserved for future import commands. CSV snapshots are written
+atomically to `files/output/asset-list.csv` and
+`files/output/tracker-list.csv` before being uploaded. Empty lists produce a
+CSV containing only its column headings.
 
 The defaults work with the persistent volume described below. They can be
 overridden when needed:
@@ -140,9 +157,11 @@ storing it. The token is redacted from application logs. The state file is
 atomically replaced with mode `0600`; mount its parent directory on persistent,
 encrypted storage in production. Never log or commit the file.
 
-The Slack app needs the `chat:write` and `commands` bot scopes. Reinstall it
-after applying the updated manifest. `SLACK_ALERT_USER_ID` also controls which
-Slack user may run `auth set`.
+The Slack app needs the `chat:write`, `commands`, and `files:write` bot scopes.
+Reinstall it after applying the updated manifest. Add the SwingEngine bot to
+each channel where it should upload CSV files; private channels require an
+explicit invitation. `SLACK_ALERT_USER_ID` also controls which Slack user may
+run `auth set`.
 
 The notifier-webhook implementation remains available for later use. It is
 inactive while `UPSTOX_TOKEN_ROTATION_ENABLED` and `UPSTOX_WEBHOOK_ENABLED`

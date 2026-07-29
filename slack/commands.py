@@ -14,10 +14,16 @@ from database.repository import (
     TrackerEntry,
     TrackerNotFoundError,
 )
+from slack.file_exports import (
+    CsvFileExporter,
+    FileExportError,
+    SlackFileUpload,
+)
 from upstox.assets import AssetCatalogError, AssetSearchResult
 
 SlackResponse = dict[str, Any]
 CommandHandler = Callable[[str], SlackResponse]
+FILE_UPLOAD_KEY = "_file_upload"
 
 
 class TokenAuthService(Protocol):
@@ -61,6 +67,15 @@ def ephemeral(text: str) -> SlackResponse:
     return {"response_type": "ephemeral", "text": text}
 
 
+def file_upload_response(text: str, upload: SlackFileUpload) -> SlackResponse:
+    """Build an ephemeral confirmation with an internal file-upload request."""
+    return {
+        "response_type": "ephemeral",
+        "text": text,
+        FILE_UPLOAD_KEY: upload,
+    }
+
+
 def help_command(_: str = "") -> SlackResponse:
     return ephemeral(
         "*SwingEngine commands*\n\n"
@@ -79,13 +94,15 @@ def help_command(_: str = "") -> SlackResponse:
         "• `/swingengine asset add <trading_symbol>` — save an NSE asset\n"
         "• `/swingengine asset delete <trading_symbol>` — delete a saved "
         "asset\n"
-        "• `/swingengine asset list` — list saved assets\n\n"
+        "• `/swingengine asset list` — list saved assets\n"
+        "• `/swingengine asset list file` — return saved assets as CSV\n\n"
         "*Tracker*\n"
         "• `/swingengine tracker add <trading_symbol>` — start tracking a "
         "saved asset\n"
         "• `/swingengine tracker delete <trading_symbol>` — stop tracking a "
         "saved asset\n"
-        "• `/swingengine tracker list` — list tracked assets\n\n"
+        "• `/swingengine tracker list` — list tracked assets\n"
+        "• `/swingengine tracker list file` — return tracked assets as CSV\n\n"
         "*Disabled workflow*\n"
         "• `/swingengine auth request` — unavailable until the Upstox "
         "notifier webhook is enabled"
@@ -186,6 +203,7 @@ def asset_command(
     arguments: str = "",
     asset_service: AssetService | None = None,
     tracker_service: AssetTrackerService | None = None,
+    file_exporter: CsvFileExporter | None = None,
 ) -> SlackResponse:
     parts = arguments.strip().split(maxsplit=1)
     action = parts[0].casefold() if parts else ""
@@ -263,12 +281,26 @@ def asset_command(
     if action == "list":
         if tracker_service is None:
             return ephemeral("Asset database is not configured.")
-        if len(parts) != 1:
-            return ephemeral("Use `/swingengine asset list`.")
+        file_requested = (
+            len(parts) == 2 and parts[1].strip().casefold() == "file"
+        )
+        if len(parts) == 2 and not file_requested:
+            return ephemeral("Use `/swingengine asset list [file]`.")
         try:
             assets = tracker_service.list_assets()
         except RepositoryError as error:
             return ephemeral(f":warning: {error}")
+        if file_requested:
+            if file_exporter is None:
+                return ephemeral("CSV file export is not configured.")
+            try:
+                upload = file_exporter.export_assets(assets)
+            except FileExportError as error:
+                return ephemeral(f":warning: {error}")
+            return file_upload_response(
+                ":white_check_mark: Saved assets CSV uploaded.",
+                upload,
+            )
         if not assets:
             return ephemeral("No assets have been saved.")
         return ephemeral(
@@ -286,6 +318,7 @@ def asset_command(
 def tracker_command(
     arguments: str = "",
     tracker_service: AssetTrackerService | None = None,
+    file_exporter: CsvFileExporter | None = None,
 ) -> SlackResponse:
     if tracker_service is None:
         return ephemeral("Asset tracker database is not configured.")
@@ -338,12 +371,26 @@ def tracker_command(
         )
 
     if action == "list":
-        if len(parts) != 1:
-            return ephemeral("Use `/swingengine tracker list`.")
+        file_requested = (
+            len(parts) == 2 and parts[1].strip().casefold() == "file"
+        )
+        if len(parts) == 2 and not file_requested:
+            return ephemeral("Use `/swingengine tracker list [file]`.")
         try:
             entries = tracker_service.list_tracker()
         except RepositoryError as error:
             return ephemeral(f":warning: {error}")
+        if file_requested:
+            if file_exporter is None:
+                return ephemeral("CSV file export is not configured.")
+            try:
+                upload = file_exporter.export_tracker(entries)
+            except FileExportError as error:
+                return ephemeral(f":warning: {error}")
+            return file_upload_response(
+                ":white_check_mark: Tracker CSV uploaded.",
+                upload,
+            )
         if not entries:
             return ephemeral("No assets are currently tracked.")
         return ephemeral(
@@ -448,6 +495,7 @@ def build_router(
     auth_service: TokenAuthService | None = None,
     asset_service: AssetService | None = None,
     tracker_service: AssetTrackerService | None = None,
+    file_exporter: CsvFileExporter | None = None,
 ) -> CommandRouter:
     router = CommandRouter()
     router.register("help", help_command)
@@ -467,11 +515,18 @@ def build_router(
     router.register(
         "asset",
         lambda arguments: asset_command(
-            arguments, asset_service, tracker_service
+            arguments,
+            asset_service,
+            tracker_service,
+            file_exporter,
         ),
     )
     router.register(
         "tracker",
-        lambda arguments: tracker_command(arguments, tracker_service),
+        lambda arguments: tracker_command(
+            arguments,
+            tracker_service,
+            file_exporter,
+        ),
     )
     return router
