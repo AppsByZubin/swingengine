@@ -13,6 +13,7 @@ RUN python -m pip install --no-cache-dir -r requirements.txt
 COPY main.py ./
 COPY database ./database
 COPY slack ./slack
+COPY tracker ./tracker
 COPY upstox ./upstox
 
 RUN groupadd --gid 10001 swingengine \
