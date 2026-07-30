@@ -305,6 +305,54 @@ class AssetTrackerRepository:
             raise RepositoryError("Unable to list tracker entries.") from error
         return [_tracker_entry(row) for row in rows]
 
+    def update_tracker_trade_settings(
+        self,
+        trading_symbol: str,
+        is_approved_for_trade: bool,
+        amount_allocated: float,
+    ) -> TrackerEntry:
+        """Update only the admin-managed trade approval and allocation."""
+        try:
+            with self._connection() as connection:
+                row = connection.execute(
+                    """
+                    UPDATE public.tracker AS tracker
+                    SET
+                        is_approved_for_trade = %s,
+                        amount_allocated = %s
+                    FROM public.assets AS asset
+                    WHERE tracker.asset_id = asset.asset_id
+                      AND upper(asset.trading_symbol) = upper(%s)
+                    RETURNING
+                        tracker.tracker_details_id,
+                        tracker.asset_id,
+                        asset.asset_name,
+                        asset.trading_symbol,
+                        tracker.has_momentum,
+                        tracker.is_trade_created,
+                        tracker.is_approved_for_trade,
+                        tracker.amount_allocated,
+                        tracker.added_date
+                    """,
+                    (
+                        is_approved_for_trade,
+                        amount_allocated,
+                        trading_symbol,
+                    ),
+                ).fetchone()
+        except psycopg.Error as error:
+            LOGGER.exception(
+                "Failed to update tracker trade settings trading_symbol=%r",
+                trading_symbol,
+            )
+            raise RepositoryError(
+                "Unable to update the tracker entry."
+            ) from error
+
+        if row is None:
+            raise TrackerNotFoundError
+        return _tracker_entry(row)
+
     def list_momentum_candidates(self) -> list[MomentumCandidate]:
         """List untracked assets and tracked assets without a created trade."""
         try:

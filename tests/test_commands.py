@@ -74,6 +74,7 @@ class FakeAssetTrackerService:
         self.deleted_asset_symbol = ""
         self.added_tracker_symbol = ""
         self.deleted_tracker_symbol = ""
+        self.updated_tracker_settings: tuple[str, bool, float] | None = None
 
     def add_asset(self, asset: AssetSearchResult) -> AssetRecord:
         self.added_catalog_asset = asset
@@ -96,6 +97,19 @@ class FakeAssetTrackerService:
 
     def list_tracker(self) -> list[TrackerEntry]:
         return [self.entry]
+
+    def update_tracker_trade_settings(
+        self,
+        trading_symbol: str,
+        is_approved_for_trade: bool,
+        amount_allocated: float,
+    ) -> TrackerEntry:
+        self.updated_tracker_settings = (
+            trading_symbol,
+            is_approved_for_trade,
+            amount_allocated,
+        )
+        return self.entry
 
 
 class FailingAssetService:
@@ -140,6 +154,7 @@ def test_help_lists_every_supported_command_and_disabled_workflow() -> None:
         "• `/swingengine tracker delete <trading_symbol>`",
         "• `/swingengine tracker asset evaluate`",
         "• `/swingengine tracker list`",
+        "• `/swingengine tracker upload`",
         "• `/swingengine auth request`",
     )
     for entry in expected_entries:
@@ -404,6 +419,14 @@ def test_tracker_list_file_requests_a_csv_upload(tmp_path) -> None:
     assert isinstance(upload, SlackFileUpload)
     assert upload.path == tmp_path / "tracker-list.csv"
     assert response["text"] == ":white_check_mark: Tracker CSV uploaded."
+
+
+def test_tracker_upload_requests_the_slack_file_modal() -> None:
+    response = build_router().dispatch("tracker upload")
+
+    assert response["response_type"] == "ephemeral"
+    assert response["text"] == "Opening the tracker CSV upload dialog."
+    assert response["_tracker_import_modal"] is True
 
 
 def test_tracker_asset_evaluate_runs_the_momentum_screen() -> None:

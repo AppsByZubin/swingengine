@@ -13,6 +13,7 @@ from database.repository import AssetTrackerRepository
 from slack.commands import (
     ASSET_IMPORT_MODAL_KEY,
     FILE_UPLOAD_KEY,
+    TRACKER_IMPORT_MODAL_KEY,
     CommandRouter,
     build_router,
     ephemeral,
@@ -24,7 +25,12 @@ from slack.file_exports import (
     SlackFileUpload,
     configured_files_directory,
 )
-from slack.file_imports import AssetImportError, CsvAssetImporter
+from slack.file_imports import (
+    AssetImportError,
+    CsvAssetImporter,
+    CsvTrackerImporter,
+    TrackerImportError,
+)
 from slack.notifier import SlackTokenNotifier
 from tracker.config import TrackerEvaluationSettings
 from tracker.evaluator import TrackerMomentumEvaluator
@@ -43,6 +49,9 @@ LOGGER = logging.getLogger(__name__)
 ASSET_IMPORT_CALLBACK_ID = "swingengine_asset_upload"
 ASSET_IMPORT_BLOCK_ID = "asset_csv"
 ASSET_IMPORT_ACTION_ID = "asset_csv_file"
+TRACKER_IMPORT_CALLBACK_ID = "swingengine_tracker_upload"
+TRACKER_IMPORT_BLOCK_ID = "tracker_csv"
+TRACKER_IMPORT_ACTION_ID = "tracker_csv_file"
 
 
 def handle_slash_command(
@@ -53,6 +62,7 @@ def handle_slash_command(
     authorized_user_id: str = "",
     client: Any = None,
     asset_importer: CsvAssetImporter | None = None,
+    tracker_importer: CsvTrackerImporter | None = None,
 ) -> None:
     """Acknowledge Slack immediately, then route the command text."""
     ack()
@@ -76,18 +86,41 @@ def handle_slash_command(
             }
         )
         return
+    if _is_tracker_upload(command_text) and (
+        not authorized_user_id
+        or command.get("user_id") != authorized_user_id
+    ):
+        respond(
+            ephemeral(
+                "You are not authorized to update tracker approvals and "
+                "allocations."
+            )
+        )
+        return
+
     response = dict(router.dispatch(command_text))
     open_asset_import_modal = response.pop(ASSET_IMPORT_MODAL_KEY, False)
-    if open_asset_import_modal:
+    open_tracker_import_modal = response.pop(
+        TRACKER_IMPORT_MODAL_KEY,
+        False,
+    )
+    if open_asset_import_modal or open_tracker_import_modal:
         trigger_id = str(command.get("trigger_id", "")).strip()
         channel_id = str(command.get("channel_id", "")).strip()
-        if asset_importer is None:
-            respond(ephemeral("Asset CSV import is not configured."))
+        importer = (
+            asset_importer
+            if open_asset_import_modal
+            else tracker_importer
+        )
+        import_name = "Asset" if open_asset_import_modal else "Tracker"
+        if importer is None:
+            respond(ephemeral(f"{import_name} CSV import is not configured."))
             return
         if client is None or not trigger_id or not channel_id:
             LOGGER.error(
-                "Cannot open asset import modal: client_available=%r "
+                "Cannot open %s import modal: client_available=%r "
                 "trigger_id_available=%r channel_id=%r",
+                import_name.casefold(),
                 client is not None,
                 bool(trigger_id),
                 channel_id,
@@ -97,12 +130,17 @@ def handle_slash_command(
         try:
             client.views_open(
                 trigger_id=trigger_id,
-                view=asset_import_modal(channel_id),
+                view=(
+                    asset_import_modal(channel_id)
+                    if open_asset_import_modal
+                    else tracker_import_modal(channel_id)
+                ),
             )
         except SlackApiError as error:
             error_code = str(error.response.get("error", "unknown_error"))
             LOGGER.error(
-                "Slack rejected asset import modal channel_id=%r error=%r",
+                "Slack rejected %s import modal channel_id=%r error=%r",
+                import_name.casefold(),
                 channel_id,
                 error_code,
             )
@@ -115,7 +153,8 @@ def handle_slash_command(
             return
         except SlackClientError:
             LOGGER.exception(
-                "Could not open asset import modal channel_id=%r",
+                "Could not open %s import modal channel_id=%r",
+                import_name.casefold(),
                 channel_id,
             )
             respond(ephemeral(":warning: Unable to open the CSV upload dialog."))
@@ -212,6 +251,46 @@ def asset_import_modal(channel_id: str) -> dict[str, Any]:
     }
 
 
+def tracker_import_modal(channel_id: str) -> dict[str, Any]:
+    """Build the modal used to select one tracker update CSV."""
+    return {
+        "type": "modal",
+        "callback_id": TRACKER_IMPORT_CALLBACK_ID,
+        "private_metadata": channel_id,
+        "title": {"type": "plain_text", "text": "Update tracker"},
+        "submit": {"type": "plain_text", "text": "Update"},
+        "close": {"type": "plain_text", "text": "Cancel"},
+        "blocks": [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "Upload an exported tracker CSV (max 1 MB / 1,000 "
+                        "rows). Only `is_approved_for_trade` and "
+                        "`amount_allocated` are updated. Approval requires "
+                        "`amount_allocated > 5000`."
+                    ),
+                },
+            },
+            {
+                "type": "input",
+                "block_id": TRACKER_IMPORT_BLOCK_ID,
+                "label": {
+                    "type": "plain_text",
+                    "text": "Tracker update CSV",
+                },
+                "element": {
+                    "type": "file_input",
+                    "action_id": TRACKER_IMPORT_ACTION_ID,
+                    "filetypes": ["csv"],
+                    "max_files": 1,
+                },
+            },
+        ],
+    }
+
+
 def handle_asset_import_submission(
     ack: Callable[[], Any],
     body: Mapping[str, Any],
@@ -221,6 +300,52 @@ def handle_asset_import_submission(
 ) -> None:
     """Acknowledge an upload modal and report the completed CSV import."""
     ack()
+    _handle_csv_import_submission(
+        body,
+        view,
+        client,
+        asset_importer,
+        AssetImportError,
+        ASSET_IMPORT_BLOCK_ID,
+        ASSET_IMPORT_ACTION_ID,
+        "Asset",
+    )
+
+
+def handle_tracker_import_submission(
+    ack: Callable[[], Any],
+    body: Mapping[str, Any],
+    view: Mapping[str, Any],
+    client: Any,
+    tracker_importer: CsvTrackerImporter | None,
+    authorized_user_id: str,
+) -> None:
+    """Apply an admin-submitted tracker CSV and send a private summary."""
+    ack()
+    _handle_csv_import_submission(
+        body,
+        view,
+        client,
+        tracker_importer,
+        TrackerImportError,
+        TRACKER_IMPORT_BLOCK_ID,
+        TRACKER_IMPORT_ACTION_ID,
+        "Tracker",
+        authorized_user_id,
+    )
+
+
+def _handle_csv_import_submission(
+    body: Mapping[str, Any],
+    view: Mapping[str, Any],
+    client: Any,
+    importer: Any,
+    error_type: type[RuntimeError],
+    block_id: str,
+    action_id: str,
+    import_name: str,
+    authorized_user_id: str | None = None,
+) -> None:
     channel_id = str(view.get("private_metadata", "")).strip()
     user = body.get("user")
     user_id = (
@@ -230,22 +355,34 @@ def handle_asset_import_submission(
     )
     if not channel_id or not user_id:
         LOGGER.error(
-            "Asset import submission is missing destination channel_id=%r "
+            "%s import submission is missing destination channel_id=%r "
             "user_id=%r",
+            import_name,
             channel_id,
             user_id,
         )
         return
-    if asset_importer is None:
+    if authorized_user_id is not None and (
+        not authorized_user_id or user_id != authorized_user_id
+    ):
         _post_ephemeral(
             client,
             channel_id,
             user_id,
-            "Asset CSV import is not configured.",
+            "You are not authorized to update tracker approvals and "
+            "allocations.",
+        )
+        return
+    if importer is None:
+        _post_ephemeral(
+            client,
+            channel_id,
+            user_id,
+            f"{import_name} CSV import is not configured.",
         )
         return
 
-    uploaded_files = _asset_import_files(view)
+    uploaded_files = _import_files(view, block_id, action_id)
     if len(uploaded_files) != 1:
         _post_ephemeral(
             client,
@@ -256,8 +393,11 @@ def handle_asset_import_submission(
         return
 
     try:
-        summary = asset_importer.import_slack_file(uploaded_files[0], client)
-    except AssetImportError as error:
+        summary = importer.import_slack_file(
+            uploaded_files[0],
+            client,
+        )
+    except error_type as error:
         _post_ephemeral(
             client,
             channel_id,
@@ -273,18 +413,20 @@ def handle_asset_import_submission(
     )
 
 
-def _asset_import_files(
+def _import_files(
     view: Mapping[str, Any],
+    block_id: str,
+    action_id: str,
 ) -> list[Mapping[str, Any]]:
     state = view.get("state")
     values = state.get("values") if isinstance(state, Mapping) else None
     block = (
-        values.get(ASSET_IMPORT_BLOCK_ID)
+        values.get(block_id)
         if isinstance(values, Mapping)
         else None
     )
     action = (
-        block.get(ASSET_IMPORT_ACTION_ID)
+        block.get(action_id)
         if isinstance(block, Mapping)
         else None
     )
@@ -309,7 +451,7 @@ def _post_ephemeral(
     except SlackApiError as error:
         error_code = str(error.response.get("error", "unknown_error"))
         LOGGER.error(
-            "Slack rejected asset import response channel_id=%r user_id=%r "
+            "Slack rejected CSV import response channel_id=%r user_id=%r "
             "error=%r",
             channel_id,
             user_id,
@@ -317,7 +459,7 @@ def _post_ephemeral(
         )
     except SlackClientError:
         LOGGER.exception(
-            "Could not send asset import response channel_id=%r user_id=%r",
+            "Could not send CSV import response channel_id=%r user_id=%r",
             channel_id,
             user_id,
         )
@@ -338,10 +480,20 @@ def _is_auth_set(text: str) -> bool:
     )
 
 
+def _is_tracker_upload(text: str) -> bool:
+    parts = text.split()
+    return (
+        len(parts) == 2
+        and parts[0].casefold() == "tracker"
+        and parts[1].casefold() == "upload"
+    )
+
+
 def create_app(
     settings: Settings,
     router: CommandRouter | None = None,
     asset_importer: CsvAssetImporter | None = None,
+    tracker_importer: CsvTrackerImporter | None = None,
 ) -> App:
     """Create and configure the Bolt app without starting it."""
     slack_app = App(token=settings.bot_token)
@@ -361,6 +513,7 @@ def create_app(
             settings.alert_user_id,
             client,
             asset_importer,
+            tracker_importer,
         )
 
     def asset_import_listener(
@@ -377,8 +530,24 @@ def create_app(
             asset_importer,
         )
 
+    def tracker_import_listener(
+        ack: Callable[[], Any],
+        body: Any,
+        view: Any,
+        client: Any,
+    ) -> None:
+        handle_tracker_import_submission(
+            ack,
+            body,
+            view,
+            client,
+            tracker_importer,
+            settings.alert_user_id,
+        )
+
     slack_app.command(settings.slash_command)(listener)
     slack_app.view(ASSET_IMPORT_CALLBACK_ID)(asset_import_listener)
+    slack_app.view(TRACKER_IMPORT_CALLBACK_ID)(tracker_import_listener)
     return slack_app
 
 
@@ -420,6 +589,11 @@ def run() -> None:
         asset_tracker_repository,
         settings.bot_token,
     )
+    tracker_importer = CsvTrackerImporter(
+        file_directories.input,
+        asset_tracker_repository,
+        settings.bot_token,
+    )
     slack_app = create_app(
         settings,
         build_router(
@@ -430,6 +604,7 @@ def run() -> None:
             tracker_evaluator,
         ),
         asset_importer,
+        tracker_importer,
     )
     notifier = SlackTokenNotifier(
         slack_app.client,

@@ -6,7 +6,11 @@ import psycopg
 import pytest
 
 from database.config import DatabaseSettings
-from database.repository import AssetTrackerRepository, RepositoryError
+from database.repository import (
+    AssetTrackerRepository,
+    RepositoryError,
+    TrackerNotFoundError,
+)
 from upstox.assets import AssetSearchResult
 
 
@@ -25,6 +29,7 @@ class StubConnection:
     def __init__(self, rows: list[tuple[Any, ...]]) -> None:
         self._rows = rows
         self.query = ""
+        self.parameters: tuple[object, ...] | None = None
 
     def __enter__(self) -> "StubConnection":
         return self
@@ -38,6 +43,7 @@ class StubConnection:
         _parameters: tuple[object, ...] | None = None,
     ) -> RowsResult:
         self.query = query
+        self.parameters = _parameters
         return RowsResult(self._rows)
 
 
@@ -103,6 +109,55 @@ def test_list_tracker_returns_all_exported_state_fields() -> None:
     assert entries[0].added_date == date(2026, 7, 28)
     assert "tracker.has_momentum" in connection.query
     assert "tracker.amount_allocated" in connection.query
+
+
+def test_update_tracker_trade_settings_changes_only_admin_managed_fields() -> None:
+    connection = StubConnection(
+        [
+            (
+                7,
+                42,
+                "TATA CONSULTANCY SERV LT",
+                "TCS",
+                True,
+                False,
+                True,
+                7500.0,
+                date(2026, 7, 30),
+            )
+        ]
+    )
+    repository = AssetTrackerRepository(
+        DatabaseSettings(database_url="postgresql:///swingengine"),
+        connect=lambda *_args, **_kwargs: connection,
+    )
+
+    entry = repository.update_tracker_trade_settings(
+        "TCS",
+        True,
+        7500.0,
+    )
+
+    assert entry.trading_symbol == "TCS"
+    assert entry.is_approved_for_trade is True
+    assert entry.amount_allocated == 7500.0
+    assert "UPDATE public.tracker AS tracker" in connection.query
+    assert "is_approved_for_trade = %s" in connection.query
+    assert "amount_allocated = %s" in connection.query
+    assert "has_momentum =" not in connection.query
+    assert "is_trade_created =" not in connection.query
+    assert connection.parameters == (True, 7500.0, "TCS")
+
+
+def test_update_tracker_trade_settings_reports_a_missing_tracker() -> None:
+    connection = StubConnection([])
+    repository = AssetTrackerRepository(
+        DatabaseSettings(database_url="postgresql:///swingengine"),
+        connect=lambda *_args, **_kwargs: connection,
+    )
+
+    with pytest.raises(TrackerNotFoundError):
+        repository.update_tracker_trade_settings("MISSING", False, 0.0)
 
 
 def test_list_momentum_candidates_includes_untracked_and_pending_assets() -> None:

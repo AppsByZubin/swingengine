@@ -57,6 +57,7 @@ except CSV exports, which it uploads to the conversation:
 /swingengine tracker delete SUNPHARMA
 /swingengine tracker list
 /swingengine tracker list file
+/swingengine tracker upload
 /swingengine tracker asset evaluate
 ```
 
@@ -134,6 +135,22 @@ snapshots are written atomically to `output/asset-list.csv` and
 containing only its column headings. Tracker exports contain the asset name,
 trading symbol, momentum/trade/approval flags, allocated amount, and added
 date; internal tracker and asset IDs are omitted.
+
+The Slack administrator configured by `SLACK_ALERT_USER_ID` can update tracker
+approval and allocation values by exporting, editing, and uploading the tracker
+CSV:
+
+```text
+/swingengine tracker list file
+/swingengine tracker upload
+```
+
+Keep the seven-column export header unchanged. SwingEngine uses
+`trading_symbol` to find each tracker row and updates only
+`is_approved_for_trade` and `amount_allocated`; changes to the other exported
+columns are ignored. Approval must be `True` or `False`. When
+`is_approved_for_trade` is `True`, `amount_allocated` must be greater than
+`5000`. An unapproved row may use any nonnegative allocation.
 
 ## Tracker momentum evaluation
 
@@ -232,11 +249,12 @@ atomically replaced with mode `0600`; mount its parent directory on persistent,
 encrypted storage in production. Never log or commit the file.
 
 The Slack app needs the `chat:write`, `commands`, `files:read`, and
-`files:write` bot scopes. `files:read` is required for asset imports and
-`files:write` is required for list exports. Reinstall the app after applying
+`files:write` bot scopes. `files:read` is required for asset and tracker imports
+and `files:write` is required for list exports. Reinstall the app after applying
 the updated manifest. Add the SwingEngine bot to each channel where it should
 import or export CSV files; private channels require an explicit invitation.
-`SLACK_ALERT_USER_ID` also controls which Slack user may run `auth set`.
+`SLACK_ALERT_USER_ID` also controls which Slack user may run `auth set` and
+`tracker upload`.
 
 The notifier-webhook implementation remains available for later use. It is
 inactive while `UPSTOX_TOKEN_ROTATION_ENABLED` and `UPSTOX_WEBHOOK_ENABLED`

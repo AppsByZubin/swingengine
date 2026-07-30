@@ -5,13 +5,17 @@ from slack.app import (
     ASSET_IMPORT_ACTION_ID,
     ASSET_IMPORT_BLOCK_ID,
     ASSET_IMPORT_CALLBACK_ID,
+    TRACKER_IMPORT_ACTION_ID,
+    TRACKER_IMPORT_BLOCK_ID,
+    TRACKER_IMPORT_CALLBACK_ID,
     _redact_sensitive_command,
     handle_asset_import_submission,
     handle_slash_command,
+    handle_tracker_import_submission,
 )
 from slack.commands import CommandRouter, build_router, file_upload_response
 from slack.file_exports import SlackFileUpload
-from slack.file_imports import AssetImportSummary
+from slack.file_imports import AssetImportSummary, TrackerImportSummary
 
 
 def test_slash_command_is_acknowledged_before_response() -> None:
@@ -223,3 +227,134 @@ def test_asset_upload_submission_imports_and_sends_private_summary() -> None:
     assert calls[1][1]["user"] == "U123"
     assert "Added: 1" in calls[1][1]["text"]
     assert "Deleted: 1" in calls[1][1]["text"]
+
+
+def test_tracker_upload_command_opens_a_csv_file_modal_for_admin() -> None:
+    calls: list[tuple[str, Any]] = []
+
+    class FakeClient:
+        def views_open(self, **arguments: Any) -> None:
+            calls.append(("modal", arguments))
+
+    handle_slash_command(
+        lambda: calls.append(("ack", None)),
+        lambda message: calls.append(("respond", message)),
+        {
+            "command": "/swingengine",
+            "text": "tracker upload",
+            "channel_id": "C456",
+            "user_id": "UADMIN",
+            "trigger_id": "trigger-456",
+        },
+        build_router(),
+        authorized_user_id="UADMIN",
+        client=FakeClient(),
+        tracker_importer=object(),  # type: ignore[arg-type]
+    )
+
+    assert calls[0] == ("ack", None)
+    assert calls[1][0] == "modal"
+    modal = calls[1][1]["view"]
+    assert modal["callback_id"] == TRACKER_IMPORT_CALLBACK_ID
+    assert modal["private_metadata"] == "C456"
+    assert "amount_allocated > 5000" in modal["blocks"][0]["text"]["text"]
+    assert modal["blocks"][1]["element"] == {
+        "type": "file_input",
+        "action_id": TRACKER_IMPORT_ACTION_ID,
+        "filetypes": ["csv"],
+        "max_files": 1,
+    }
+
+
+def test_tracker_upload_command_is_restricted_to_admin() -> None:
+    calls: list[tuple[str, Any]] = []
+
+    handle_slash_command(
+        lambda: calls.append(("ack", None)),
+        lambda message: calls.append(("respond", message)),
+        {
+            "command": "/swingengine",
+            "text": "tracker upload",
+            "channel_id": "C456",
+            "user_id": "UOTHER",
+            "trigger_id": "trigger-456",
+        },
+        build_router(),
+        authorized_user_id="UADMIN",
+    )
+
+    assert calls[0] == ("ack", None)
+    assert calls[1][0] == "respond"
+    assert "not authorized" in calls[1][1]["text"]
+
+
+def test_tracker_upload_submission_updates_and_sends_private_summary() -> None:
+    calls: list[tuple[str, Any]] = []
+    uploaded_file = {"id": "F789", "name": "tracker-list.csv"}
+
+    class FakeImporter:
+        def import_slack_file(
+            self,
+            file: dict[str, Any],
+            client: Any,
+        ) -> TrackerImportSummary:
+            assert file == uploaded_file
+            assert isinstance(client, FakeClient)
+            return TrackerImportSummary(
+                total=1,
+                updated=1,
+                failed=0,
+                issues=(),
+            )
+
+    class FakeClient:
+        def chat_postEphemeral(self, **arguments: Any) -> None:
+            calls.append(("message", arguments))
+
+    handle_tracker_import_submission(
+        lambda: calls.append(("ack", None)),
+        {"user": {"id": "UADMIN"}},
+        {
+            "private_metadata": "C456",
+            "state": {
+                "values": {
+                    TRACKER_IMPORT_BLOCK_ID: {
+                        TRACKER_IMPORT_ACTION_ID: {
+                            "type": "file_input",
+                            "files": [uploaded_file],
+                        }
+                    }
+                }
+            },
+        },
+        FakeClient(),
+        FakeImporter(),  # type: ignore[arg-type]
+        authorized_user_id="UADMIN",
+    )
+
+    assert calls[0] == ("ack", None)
+    assert calls[1][0] == "message"
+    assert calls[1][1]["channel"] == "C456"
+    assert calls[1][1]["user"] == "UADMIN"
+    assert "Updated: 1" in calls[1][1]["text"]
+
+
+def test_tracker_upload_submission_rechecks_admin_identity() -> None:
+    calls: list[tuple[str, Any]] = []
+
+    class FakeClient:
+        def chat_postEphemeral(self, **arguments: Any) -> None:
+            calls.append(("message", arguments))
+
+    handle_tracker_import_submission(
+        lambda: calls.append(("ack", None)),
+        {"user": {"id": "UOTHER"}},
+        {"private_metadata": "C456"},
+        FakeClient(),
+        object(),  # type: ignore[arg-type]
+        authorized_user_id="UADMIN",
+    )
+
+    assert calls[0] == ("ack", None)
+    assert calls[1][0] == "message"
+    assert "not authorized" in calls[1][1]["text"]

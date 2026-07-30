@@ -25,6 +25,7 @@ SlackResponse = dict[str, Any]
 CommandHandler = Callable[[str], SlackResponse]
 FILE_UPLOAD_KEY = "_file_upload"
 ASSET_IMPORT_MODAL_KEY = "_asset_import_modal"
+TRACKER_IMPORT_MODAL_KEY = "_tracker_import_modal"
 
 
 class TokenAuthService(Protocol):
@@ -62,6 +63,14 @@ class AssetTrackerService(Protocol):
     def list_tracker(self) -> list[TrackerEntry]:
         """Return tracker entries joined with their saved assets."""
 
+    def update_tracker_trade_settings(
+        self,
+        trading_symbol: str,
+        is_approved_for_trade: bool,
+        amount_allocated: float,
+    ) -> TrackerEntry:
+        """Update an entry's admin-managed approval and allocation."""
+
 
 class TrackerEvaluationService(Protocol):
     def evaluate_message(self) -> str:
@@ -88,6 +97,15 @@ def asset_import_modal_response(text: str) -> SlackResponse:
         "response_type": "ephemeral",
         "text": text,
         ASSET_IMPORT_MODAL_KEY: True,
+    }
+
+
+def tracker_import_modal_response(text: str) -> SlackResponse:
+    """Request that the Slack adapter open the tracker CSV upload modal."""
+    return {
+        "response_type": "ephemeral",
+        "text": text,
+        TRACKER_IMPORT_MODAL_KEY: True,
     }
 
 
@@ -120,7 +138,9 @@ def help_command(_: str = "") -> SlackResponse:
         "• `/swingengine tracker asset evaluate` — evaluate saved and pending "
         "tracker assets now\n"
         "• `/swingengine tracker list` — list tracked assets\n"
-        "• `/swingengine tracker list file` — return tracked assets as CSV\n\n"
+        "• `/swingengine tracker list file` — return tracked assets as CSV\n"
+        "• `/swingengine tracker upload` — update tracker approvals and "
+        "allocations from CSV\n\n"
         "*Disabled workflow*\n"
         "• `/swingengine auth request` — unavailable until the Upstox "
         "notifier webhook is enabled"
@@ -356,6 +376,13 @@ def tracker_command(
             return ephemeral("Tracker asset evaluation is not configured.")
         return ephemeral(evaluation_service.evaluate_message())
 
+    if action == "upload":
+        if len(parts) != 1:
+            return ephemeral("Use `/swingengine tracker upload`.")
+        return tracker_import_modal_response(
+            "Opening the tracker CSV upload dialog."
+        )
+
     if tracker_service is None:
         return ephemeral("Asset tracker database is not configured.")
 
@@ -435,7 +462,7 @@ def tracker_command(
 
     return ephemeral(
         "Unknown tracker action. Use "
-        "`/swingengine tracker add|delete|list ...` or "
+        "`/swingengine tracker add|delete|list|upload ...` or "
         "`/swingengine tracker asset evaluate`."
     )
 

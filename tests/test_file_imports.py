@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -8,8 +9,15 @@ from database.repository import (
     AssetInUseError,
     AssetNotFoundError,
     AssetRecord,
+    TrackerEntry,
+    TrackerNotFoundError,
 )
-from slack.file_imports import AssetImportError, CsvAssetImporter
+from slack.file_imports import (
+    AssetImportError,
+    CsvAssetImporter,
+    CsvTrackerImporter,
+    TrackerImportError,
+)
 from upstox.assets import AssetSearchResult
 
 
@@ -57,6 +65,39 @@ class FakeRepository:
         return _asset_record(trading_symbol)
 
 
+class FakeTrackerRepository:
+    def __init__(self, missing_symbols: set[str] | None = None) -> None:
+        self.missing_symbols = set(missing_symbols or ())
+        self.updates: list[tuple[str, bool, float]] = []
+
+    def update_tracker_trade_settings(
+        self,
+        trading_symbol: str,
+        is_approved_for_trade: bool,
+        amount_allocated: float,
+    ) -> TrackerEntry:
+        if trading_symbol in self.missing_symbols:
+            raise TrackerNotFoundError
+        self.updates.append(
+            (
+                trading_symbol,
+                is_approved_for_trade,
+                amount_allocated,
+            )
+        )
+        return TrackerEntry(
+            tracker_details_id=1,
+            asset_id=2,
+            asset_name=f"{trading_symbol} LIMITED",
+            trading_symbol=trading_symbol,
+            has_momentum=True,
+            is_trade_created=False,
+            is_approved_for_trade=is_approved_for_trade,
+            amount_allocated=amount_allocated,
+            added_date=date(2026, 7, 30),
+        )
+
+
 class FakeResponse:
     def __init__(self, content: bytes) -> None:
         self._content = content
@@ -95,6 +136,25 @@ def _importer(
         "xoxb-secret",
         **kwargs,
     )
+
+
+def _tracker_importer(
+    tmp_path: Path,
+    repository: FakeTrackerRepository,
+    **kwargs: Any,
+) -> CsvTrackerImporter:
+    return CsvTrackerImporter(
+        tmp_path,
+        repository,
+        "xoxb-secret",
+        **kwargs,
+    )
+
+
+TRACKER_HEADER = (
+    "asset_name,trading_symbol,has_momentum,is_trade_created,"
+    "is_approved_for_trade,amount_allocated,added_date\n"
+)
 
 
 def test_import_applies_sample_adds_and_delete_with_uppercase_symbols(
@@ -321,3 +381,147 @@ def test_slack_file_type_size_and_url_are_validated(
 
     with pytest.raises(AssetImportError):
         importer.import_slack_file(file_info, client=object())
+
+
+def test_tracker_import_updates_only_approval_and_allocation(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "tracker.csv"
+    csv_path.write_text(
+        TRACKER_HEADER
+        + "Tampered Name,tcs,False,True,True,5000.01,1999-01-01\n"
+        + "Another Name,infy,True,False,False,0,2030-12-31\n",
+        encoding="utf-8",
+    )
+    repository = FakeTrackerRepository()
+
+    summary = _tracker_importer(
+        tmp_path,
+        repository,
+    ).import_path(csv_path)
+
+    assert summary.total == 2
+    assert summary.updated == 2
+    assert summary.failed == 0
+    assert repository.updates == [
+        ("TCS", True, 5000.01),
+        ("INFY", False, 0.0),
+    ]
+    assert "Updated: 2" in summary.slack_message()
+
+
+def test_tracker_import_validates_approval_amount_and_duplicates(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "tracker.csv"
+    csv_path.write_text(
+        TRACKER_HEADER
+        + "TCS,TCS,True,False,True,5000,2026-07-30\n"
+        + "INFY,INFY,True,False,yes,8000,2026-07-30\n"
+        + "RELIANCE,RELIANCE,True,False,False,-1,2026-07-30\n"
+        + "TCS,TCS,True,False,False,0,2026-07-30\n"
+        + "WIPRO,WIPRO,True,False,False,0,2026-07-30\n",
+        encoding="utf-8",
+    )
+    repository = FakeTrackerRepository()
+
+    summary = _tracker_importer(
+        tmp_path,
+        repository,
+    ).import_path(csv_path)
+
+    assert summary.total == 5
+    assert summary.updated == 1
+    assert summary.failed == 4
+    assert repository.updates == [("WIPRO", False, 0.0)]
+    assert "greater than 5000" in summary.issues[0]
+    assert "must be `True` or `False`" in summary.issues[1]
+    assert "must be a nonnegative number" in summary.issues[2]
+    assert "duplicate trading symbol" in summary.issues[3]
+
+
+@pytest.mark.parametrize(
+    ("contents", "message"),
+    [
+        (
+            "trading_symbol,is_approved_for_trade,amount_allocated\n"
+            "TCS,True,6000\n",
+            "header must contain exactly",
+        ),
+        (TRACKER_HEADER, "contains no tracker rows"),
+    ],
+)
+def test_tracker_import_requires_the_exported_csv_structure(
+    tmp_path: Path,
+    contents: str,
+    message: str,
+) -> None:
+    csv_path = tmp_path / "tracker.csv"
+    csv_path.write_text(contents, encoding="utf-8")
+
+    with pytest.raises(TrackerImportError, match=message):
+        _tracker_importer(
+            tmp_path,
+            FakeTrackerRepository(),
+        ).import_path(csv_path)
+
+
+def test_tracker_import_reports_symbols_that_are_not_tracked(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "tracker.csv"
+    csv_path.write_text(
+        TRACKER_HEADER
+        + "Unknown,missing,True,False,False,0,2026-07-30\n",
+        encoding="utf-8",
+    )
+
+    summary = _tracker_importer(
+        tmp_path,
+        FakeTrackerRepository({"MISSING"}),
+    ).import_path(csv_path)
+
+    assert summary.updated == 0
+    assert summary.failed == 1
+    assert "asset is not tracked" in summary.issues[0]
+
+
+def test_tracker_slack_file_is_downloaded_and_imported(
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+    response = FakeResponse(
+        (
+            TRACKER_HEADER
+            + "TCS,tcs,True,False,True,7500,2026-07-30\n"
+        ).encode()
+    )
+
+    def http_get(url: str, **kwargs: Any) -> FakeResponse:
+        calls.append((url, kwargs))
+        return response
+
+    repository = FakeTrackerRepository()
+    summary = _tracker_importer(
+        tmp_path,
+        repository,
+        http_get=http_get,
+    ).import_slack_file(
+        {
+            "id": "F789",
+            "name": "tracker-list.csv",
+            "size": 200,
+            "url_private_download": (
+                "https://files.slack.com/files-pri/T123-F789/tracker-list.csv"
+            ),
+        },
+        client=object(),
+    )
+
+    assert summary.updated == 1
+    assert repository.updates == [("TCS", True, 7500.0)]
+    assert calls[0][1]["headers"] == {
+        "Authorization": "Bearer xoxb-secret"
+    }
+    assert response.closed is True
+    assert (tmp_path / "tracker-import-F789.csv").exists()
