@@ -97,8 +97,8 @@ def test_list_tracker_returns_all_exported_state_fields() -> None:
 
     assert len(entries) == 1
     assert entries[0].has_momentum is True
-    assert entries[0].is_order_created is False
-    assert entries[0].is_approved_for_order is True
+    assert entries[0].is_trade_created is False
+    assert entries[0].is_approved_for_trade is True
     assert entries[0].amount_allocated == 12500.5
     assert entries[0].added_date == date(2026, 7, 28)
     assert "tracker.has_momentum" in connection.query
@@ -138,7 +138,7 @@ def test_list_momentum_candidates_includes_untracked_and_pending_assets() -> Non
     assert candidates[0].tracker_details_id is None
     assert candidates[1].tracker_details_id == 9
     assert "LEFT JOIN public.tracker" in connection.query
-    assert "tracker.is_order_created = FALSE" in connection.query
+    assert "tracker.is_trade_created = FALSE" in connection.query
 
 
 def test_qualifying_momentum_is_upserted_with_requested_tracker_state() -> None:
@@ -157,8 +157,8 @@ def test_qualifying_momentum_is_upserted_with_requested_tracker_state() -> None:
     assert persisted
     assert "ON CONFLICT (asset_id) DO UPDATE" in connection.query
     assert "has_momentum = TRUE" in connection.query
-    assert "is_order_created = FALSE" in connection.query
-    assert "is_approved_for_order = FALSE" in connection.query
+    assert "is_trade_created = FALSE" in connection.query
+    assert "is_approved_for_trade = FALSE" in connection.query
 
 
 def test_nonqualifying_pending_momentum_is_cleared_without_insert() -> None:
@@ -177,4 +177,4 @@ def test_nonqualifying_pending_momentum_is_cleared_without_insert() -> None:
     assert persisted
     assert "UPDATE public.tracker" in connection.query
     assert "has_momentum = FALSE" in connection.query
-    assert "is_order_created = FALSE" in connection.query
+    assert "is_trade_created = FALSE" in connection.query

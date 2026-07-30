@@ -53,15 +53,15 @@ class TrackerEntry:
     asset_name: str
     trading_symbol: str
     has_momentum: bool
-    is_order_created: bool
-    is_approved_for_order: bool
+    is_trade_created: bool
+    is_approved_for_trade: bool
     amount_allocated: float
     added_date: date
 
 
 @dataclass(frozen=True, slots=True)
 class MomentumCandidate:
-    """A saved asset eligible for insertion or pending-order reevaluation."""
+    """A saved asset eligible for insertion or pending-trade reevaluation."""
 
     asset_id: int
     asset_name: str
@@ -185,8 +185,8 @@ class AssetTrackerRepository:
                         tracker_details_id,
                         asset_id,
                         has_momentum,
-                        is_order_created,
-                        is_approved_for_order,
+                        is_trade_created,
+                        is_approved_for_trade,
                         amount_allocated,
                         added_date
                     """,
@@ -238,8 +238,8 @@ class AssetTrackerRepository:
             asset_name=str(asset_row[0]),
             trading_symbol=str(asset_row[1]),
             has_momentum=bool(row[2]),
-            is_order_created=bool(row[3]),
-            is_approved_for_order=bool(row[4]),
+            is_trade_created=bool(row[3]),
+            is_approved_for_trade=bool(row[4]),
             amount_allocated=float(row[5]),
             added_date=row[6],
         )
@@ -259,8 +259,8 @@ class AssetTrackerRepository:
                         asset.asset_name,
                         asset.trading_symbol,
                         tracker.has_momentum,
-                        tracker.is_order_created,
-                        tracker.is_approved_for_order,
+                        tracker.is_trade_created,
+                        tracker.is_approved_for_trade,
                         tracker.amount_allocated,
                         tracker.added_date
                     """,
@@ -290,8 +290,8 @@ class AssetTrackerRepository:
                         asset.asset_name,
                         asset.trading_symbol,
                         tracker.has_momentum,
-                        tracker.is_order_created,
-                        tracker.is_approved_for_order,
+                        tracker.is_trade_created,
+                        tracker.is_approved_for_trade,
                         tracker.amount_allocated,
                         tracker.added_date
                     FROM public.tracker AS tracker
@@ -306,7 +306,7 @@ class AssetTrackerRepository:
         return [_tracker_entry(row) for row in rows]
 
     def list_momentum_candidates(self) -> list[MomentumCandidate]:
-        """List untracked assets and tracked assets without a created order."""
+        """List untracked assets and tracked assets without a created trade."""
         try:
             with self._connection() as connection:
                 rows = connection.execute(
@@ -321,7 +321,7 @@ class AssetTrackerRepository:
                     LEFT JOIN public.tracker AS tracker
                       ON tracker.asset_id = asset.asset_id
                     WHERE tracker.tracker_details_id IS NULL
-                       OR tracker.is_order_created = FALSE
+                       OR tracker.is_trade_created = FALSE
                     ORDER BY asset.trading_symbol, asset.asset_id
                     """
                 ).fetchall()
@@ -338,7 +338,7 @@ class AssetTrackerRepository:
         has_momentum: bool,
         evaluation_date: date,
     ) -> bool:
-        """Apply one evaluation without changing order-created tracker rows.
+        """Apply one evaluation without changing trade-created tracker rows.
 
         Qualifying untracked assets are inserted. Qualifying pending entries
         are refreshed and reset to unapproved. Pending entries that no longer
@@ -352,18 +352,18 @@ class AssetTrackerRepository:
                         INSERT INTO public.tracker AS current_tracker (
                             asset_id,
                             has_momentum,
-                            is_order_created,
-                            is_approved_for_order,
+                            is_trade_created,
+                            is_approved_for_trade,
                             added_date
                         )
                         VALUES (%s, TRUE, FALSE, FALSE, %s)
                         ON CONFLICT (asset_id) DO UPDATE
                         SET
                             has_momentum = TRUE,
-                            is_order_created = FALSE,
-                            is_approved_for_order = FALSE,
+                            is_trade_created = FALSE,
+                            is_approved_for_trade = FALSE,
                             added_date = EXCLUDED.added_date
-                        WHERE current_tracker.is_order_created = FALSE
+                        WHERE current_tracker.is_trade_created = FALSE
                         RETURNING tracker_details_id
                         """,
                         (asset_id, evaluation_date),
@@ -374,9 +374,9 @@ class AssetTrackerRepository:
                         UPDATE public.tracker
                         SET
                             has_momentum = FALSE,
-                            is_approved_for_order = FALSE
+                            is_approved_for_trade = FALSE
                         WHERE asset_id = %s
-                          AND is_order_created = FALSE
+                          AND is_trade_created = FALSE
                         RETURNING tracker_details_id
                         """,
                         (asset_id,),
@@ -414,8 +414,8 @@ def _tracker_entry(row: tuple[Any, ...]) -> TrackerEntry:
         asset_name=str(row[2]),
         trading_symbol=str(row[3]),
         has_momentum=bool(row[4]),
-        is_order_created=bool(row[5]),
-        is_approved_for_order=bool(row[6]),
+        is_trade_created=bool(row[5]),
+        is_approved_for_trade=bool(row[6]),
         amount_allocated=float(row[7]),
         added_date=row[8],
     )

@@ -132,14 +132,14 @@ with `SWINGENGINE_FILES_DIR`. Uploaded asset CSVs are stored in `input`. CSV
 snapshots are written atomically to `output/asset-list.csv` and
 `output/tracker-list.csv` before being uploaded. Empty lists produce a CSV
 containing only its column headings. Tracker exports contain the asset name,
-trading symbol, momentum/order/approval flags, allocated amount, and added
+trading symbol, momentum/trade/approval flags, allocated amount, and added
 date; internal tracker and asset IDs are omitted.
 
 ## Tracker momentum evaluation
 
 At 4 PM `Asia/Kolkata` on weekdays, SwingEngine evaluates every saved asset
 that is not yet tracked and every tracked asset where
-`is_order_created = FALSE`. It requests the previous 200 calendar days of
+`is_trade_created = FALSE`. It requests the previous 200 calendar days of
 daily Upstox candles and combines the V3 historical response with the V3
 intraday daily candle so the current trading day is included.
 
@@ -156,9 +156,9 @@ sma_50_angle > 50
 
 A qualifying untracked asset is inserted into `tracker`. A qualifying pending
 entry is refreshed. Both receive `has_momentum = TRUE`,
-`is_order_created = FALSE`, `is_approved_for_order = FALSE`, and the current
+`is_trade_created = FALSE`, `is_approved_for_trade = FALSE`, and the current
 date. A pending entry that no longer qualifies has momentum and approval
-cleared. Rows with a created order are not changed.
+cleared. Rows with a created trade are not changed.
 
 Run the same evaluation on demand:
 
@@ -299,8 +299,9 @@ export SWINGENGINE_DATABASE_URL='postgresql://swingengine_app:password@postgres:
 export SWINGENGINE_DATABASE_CONNECT_TIMEOUT_SECONDS=10
 ```
 
-Use a PostgreSQL role with `SELECT`, `INSERT`, and `DELETE` privileges on the
-`assets` and `tracker` tables, plus usage on their identity sequences. Keep
+Use a PostgreSQL role with `SELECT`, `INSERT`, `UPDATE`, and `DELETE`
+privileges on the `assets` and `tracker` tables, plus usage on their identity
+sequences. `UPDATE` on `tracker` is required by momentum reevaluation. Keep
 credentials out of source control.
 
 ## Container image

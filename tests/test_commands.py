@@ -65,8 +65,8 @@ class FakeAssetTrackerService:
             asset_name=self.asset.asset_name,
             trading_symbol=self.asset.trading_symbol,
             has_momentum=True,
-            is_order_created=False,
-            is_approved_for_order=True,
+            is_trade_created=False,
+            is_approved_for_trade=True,
             amount_allocated=12500.5,
             added_date=date(2026, 7, 28),
         )
