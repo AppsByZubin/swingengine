@@ -13,6 +13,7 @@ from slack.file_exports import (
     FileStorageError,
     configured_files_directory,
 )
+from tracker.momentum_scanner import MomentumStock
 
 
 def test_file_directory_uses_environment_override(tmp_path) -> None:
@@ -118,6 +119,27 @@ def test_tracker_csv_contains_database_fields(tmp_path) -> None:
             "12500.5",
             "2026-07-28",
         ],
+    ]
+
+
+def test_momentum_csv_contains_requested_fields(tmp_path) -> None:
+    upload = CsvFileExporter(tmp_path).export_momentum(
+        [
+            MomentumStock(
+                asset_name="SUN PHARMACEUTICAL IND L",
+                trading_symbol="SUNPHARMA",
+                ltp=1789.25,
+            )
+        ]
+    )
+
+    with upload.path.open(encoding="utf-8", newline="") as exported_file:
+        rows = list(csv.reader(exported_file))
+
+    assert upload.path == tmp_path / "momentum-list.csv"
+    assert rows == [
+        ["assetname", "trading_symbol", "ltp"],
+        ["SUN PHARMACEUTICAL IND L", "SUNPHARMA", "1789.25"],
     ]
 
 

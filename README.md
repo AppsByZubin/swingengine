@@ -53,6 +53,7 @@ except CSV exports, which it uploads to the conversation:
 /swingengine asset list
 /swingengine asset list file
 /swingengine asset upload
+/swingengine momentum list file
 /swingengine tracker add SUNPHARMA
 /swingengine tracker delete SUNPHARMA
 /swingengine tracker list
@@ -131,10 +132,49 @@ directory. Source-checkout runs default to `files`, while the container uses
 the writable persistent path `/var/lib/swingengine/files`. Override either
 with `SWINGENGINE_FILES_DIR`. Uploaded asset CSVs are stored in `input`. CSV
 snapshots are written atomically to `output/asset-list.csv` and
-`output/tracker-list.csv` before being uploaded. Empty lists produce a CSV
-containing only its column headings. Tracker exports contain the asset name,
-trading symbol, momentum/trade/approval flags, allocated amount, and added
-date; internal tracker and asset IDs are omitted.
+`output/tracker-list.csv` before being uploaded. Momentum scans use
+`output/momentum-list.csv`. Empty lists produce a CSV containing only their
+column headings. Tracker exports contain the asset name, trading symbol,
+momentum/trade/approval flags, allocated amount, and added date; internal
+tracker and asset IDs are omitted.
+
+## NSE-wide momentum CSV
+
+Run a fresh momentum screen across every normal NSE equity in the Upstox
+instrument catalogue:
+
+```text
+/swingengine momentum list file
+```
+
+The command refreshes `NSE.json` first, selects rows where `segment = NSE_EQ`
+and `instrument_type = EQ`, and obtains the current daily OHLC/LTP in batches.
+It then requests daily history for each equity and applies the same EMA-21 and
+SMA-50 angle thresholds as the tracker evaluator. The current daily quote is
+included only when it represents a newer trading session than the historical
+candles, so weekends and market holidays do not duplicate the last session.
+
+Qualifying equities are uploaded as `momentum-list.csv` with exactly these
+columns:
+
+```csv
+assetname,trading_symbol,ltp
+```
+
+This scan is read-only with respect to the `assets` and `tracker` database
+tables. A valid stored Upstox access token is required. Historical requests
+are spaced by one second by default to stay below Upstox's long-window API
+limit, so a full NSE scan can take tens of minutes. Override the spacing only
+when the account's available request budget is known:
+
+```bash
+export SWINGENGINE_MOMENTUM_SCAN_REQUEST_INTERVAL_SECONDS=1.0
+```
+
+INFO logs mark scan start, catalogue refresh, quote batches, every 100
+processed equities, CSV generation, Slack upload, and final counts. Individual
+successful evaluations are available at DEBUG level; failed equities include
+their symbol, instrument key, and exception traceback at WARNING level.
 
 The Slack administrator configured by `SLACK_ALERT_USER_ID` can update tracker
 approval and allocation values by exporting, editing, and uploading the tracker
@@ -192,6 +232,7 @@ export SWINGENGINE_TRACKER_EVALUATION_TIMEZONE=Asia/Kolkata
 export SWINGENGINE_TRACKER_EVALUATION_LOOKBACK_DAYS=200
 export SWINGENGINE_TRACKER_EMA_ANGLE_THRESHOLD=70
 export SWINGENGINE_TRACKER_SMA_ANGLE_THRESHOLD=50
+export SWINGENGINE_MOMENTUM_SCAN_REQUEST_INTERVAL_SECONDS=1.0
 export SWINGENGINE_TRACKER_EVALUATION_RETRY_INTERVAL_SECONDS=300
 export SWINGENGINE_TRACKER_EVALUATION_POLL_INTERVAL_SECONDS=30
 ```

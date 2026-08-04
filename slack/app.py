@@ -34,6 +34,7 @@ from slack.file_imports import (
 from slack.notifier import SlackTokenNotifier
 from tracker.config import TrackerEvaluationSettings
 from tracker.evaluator import TrackerMomentumEvaluator
+from tracker.momentum_scanner import NSEMomentumScanner
 from tracker.scheduler import TrackerEvaluationScheduler
 from upstox.assets import AssetCatalog, AssetCatalogSettings
 from upstox.client import UpstoxAuthClient
@@ -74,6 +75,14 @@ def handle_slash_command(
         command.get("user_id"),
         command.get("channel_id"),
     )
+    if _is_momentum_list_file(command_text):
+        respond(
+            ephemeral(
+                ":hourglass_flowing_sand: NSE momentum scan started. "
+                "A full rate-limited scan can take tens of minutes; the "
+                "CSV will be uploaded to this conversation when ready."
+            )
+        )
     if (
         _is_auth_set(command_text)
         and authorized_user_id
@@ -183,6 +192,12 @@ def handle_slash_command(
         return
 
     try:
+        LOGGER.info(
+            "Starting Slack CSV upload channel_id=%r filename=%r path=%s",
+            channel_id,
+            upload.path.name,
+            upload.path,
+        )
         client.files_upload_v2(
             channel=channel_id,
             file=str(upload.path),
@@ -208,6 +223,13 @@ def handle_slash_command(
         LOGGER.exception("Could not upload CSV to Slack channel_id=%r", channel_id)
         respond(ephemeral(":warning: Unable to upload the CSV to Slack."))
         return
+
+    LOGGER.info(
+        "Completed Slack CSV upload channel_id=%r filename=%r path=%s",
+        channel_id,
+        upload.path.name,
+        upload.path,
+    )
 
     respond(response)
 
@@ -489,6 +511,16 @@ def _is_tracker_upload(text: str) -> bool:
     )
 
 
+def _is_momentum_list_file(text: str) -> bool:
+    parts = text.split()
+    return (
+        len(parts) == 3
+        and parts[0].casefold() == "momentum"
+        and parts[1].casefold() == "list"
+        and parts[2].casefold() == "file"
+    )
+
+
 def create_app(
     settings: Settings,
     router: CommandRouter | None = None,
@@ -583,6 +615,12 @@ def run() -> None:
         auth_client,
         token_store,
     )
+    momentum_scanner = NSEMomentumScanner(
+        tracker_evaluation_settings,
+        asset_catalog,
+        auth_client,
+        token_store,
+    )
     asset_importer = CsvAssetImporter(
         file_directories.input,
         asset_catalog,
@@ -597,11 +635,12 @@ def run() -> None:
     slack_app = create_app(
         settings,
         build_router(
-            token_service,
-            asset_catalog,
-            asset_tracker_repository,
-            file_exporter,
-            tracker_evaluator,
+            auth_service=token_service,
+            asset_service=asset_catalog,
+            tracker_service=asset_tracker_repository,
+            file_exporter=file_exporter,
+            evaluation_service=tracker_evaluator,
+            momentum_service=momentum_scanner,
         ),
         asset_importer,
         tracker_importer,

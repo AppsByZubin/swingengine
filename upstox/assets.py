@@ -4,6 +4,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 import gzip
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -17,6 +18,8 @@ import requests
 DEFAULT_ASSET_URL = (
     "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 class AssetConfigurationError(ValueError):
@@ -135,6 +138,12 @@ class AssetCatalog:
             parent = self.settings.catalog_file.parent
             compressed_path: Path | None = None
             json_path: Path | None = None
+            LOGGER.info(
+                "Starting Upstox NSE asset catalog refresh source_url=%s "
+                "catalog_file=%s",
+                self.settings.source_url,
+                self.settings.catalog_file,
+            )
             try:
                 parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 compressed_path = _temporary_path(
@@ -153,6 +162,12 @@ class AssetCatalog:
                 json_path = None
                 self._cache = assets
                 self._cache_signature = (stat.st_mtime_ns, stat.st_size)
+                LOGGER.info(
+                    "Completed Upstox NSE asset catalog refresh "
+                    "catalog_file=%s asset_count=%d",
+                    self.settings.catalog_file,
+                    len(assets),
+                )
                 return len(assets)
             except (
                 OSError,
@@ -161,6 +176,12 @@ class AssetCatalog:
                 json.JSONDecodeError,
                 requests.RequestException,
             ) as error:
+                LOGGER.exception(
+                    "Unable to refresh Upstox NSE asset catalog "
+                    "source_url=%s catalog_file=%s",
+                    self.settings.source_url,
+                    self.settings.catalog_file,
+                )
                 raise AssetCatalogError(
                     "Unable to refresh the Upstox NSE asset catalog"
                 ) from error
@@ -201,6 +222,32 @@ class AssetCatalog:
 
         ranked_matches.sort(key=lambda match: match[0])
         return [result for _, result in ranked_matches[:result_limit]]
+
+    def list_equities(self) -> list[AssetSearchResult]:
+        """Return all NSE equity instruments in trading-symbol order."""
+        with self._lock:
+            assets = self._load_catalog()
+
+        equities = [
+            asset.result
+            for asset in assets
+            if asset.result.segment.casefold() == "nse_eq"
+            and asset.result.instrument_type.casefold() == "eq"
+        ]
+        equities.sort(
+            key=lambda asset: (
+                asset.trading_symbol.casefold(),
+                asset.name.casefold(),
+                asset.instrument_key.casefold(),
+            )
+        )
+        LOGGER.info(
+            "Selected NSE equity instruments catalog_file=%s "
+            "equity_count=%d",
+            self.settings.catalog_file,
+            len(equities),
+        )
+        return equities
 
     def _download(self, destination: Path) -> None:
         response = self._http_get(

@@ -10,6 +10,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any, Mapping
 
 from database.repository import AssetRecord, TrackerEntry
+from tracker.momentum_scanner import MomentumStock
 
 LOGGER = logging.getLogger(__name__)
 
@@ -151,6 +152,28 @@ class CsvFileExporter:
             path=path,
             title="SwingEngine tracker",
             initial_comment="Tracked assets exported by SwingEngine.",
+        )
+
+    def export_momentum(
+        self,
+        stocks: Sequence[MomentumStock],
+    ) -> SlackFileUpload:
+        path = self._write_csv(
+            "momentum-list.csv",
+            ("assetname", "trading_symbol", "ltp"),
+            (
+                (
+                    stock.asset_name,
+                    stock.trading_symbol,
+                    stock.ltp,
+                )
+                for stock in stocks
+            ),
+        )
+        return SlackFileUpload(
+            path=path,
+            title="SwingEngine NSE momentum stocks",
+            initial_comment="NSE momentum stocks exported by SwingEngine.",
         )
 
     def _write_csv(

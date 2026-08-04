@@ -191,3 +191,48 @@ def test_search_requires_a_refreshed_catalog(tmp_path: Path) -> None:
 
     with pytest.raises(AssetCatalogError, match="instrument refresh"):
         catalog.search("sun")
+
+
+def test_list_equities_filters_and_sorts_the_refreshed_catalog(
+    tmp_path: Path,
+) -> None:
+    catalog_file = tmp_path / "NSE.json"
+    catalog_file.write_text(
+        json.dumps(
+            [
+                {
+                    "segment": "NSE_EQ",
+                    "name": "ZED LIMITED",
+                    "instrument_type": "EQ",
+                    "instrument_key": "NSE_EQ|ZED",
+                    "trading_symbol": "ZED",
+                },
+                {
+                    "segment": "NSE_FO",
+                    "name": "ZED LIMITED",
+                    "instrument_type": "FUTSTK",
+                    "instrument_key": "NSE_FO|ZED",
+                    "trading_symbol": "ZED FUT",
+                },
+                {
+                    "segment": "NSE_EQ",
+                    "name": "ALPHA ETF",
+                    "instrument_type": "ETF",
+                    "instrument_key": "NSE_EQ|ETF",
+                    "trading_symbol": "ALPHAETF",
+                },
+                {
+                    "segment": "nse_eq",
+                    "name": "ALPHA LIMITED",
+                    "instrument_type": "eq",
+                    "instrument_key": "NSE_EQ|ALPHA",
+                    "trading_symbol": "ALPHA",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    equities = AssetCatalog(settings(catalog_file)).list_equities()
+
+    assert [asset.trading_symbol for asset in equities] == ["ALPHA", "ZED"]

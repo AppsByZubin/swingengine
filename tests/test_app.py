@@ -34,6 +34,34 @@ def test_slash_command_is_acknowledged_before_response() -> None:
     assert calls[1][1]["text"] == "pong"
 
 
+def test_momentum_scan_reports_started_before_running_handler() -> None:
+    calls: list[tuple[str, Any]] = []
+    router = CommandRouter()
+    router.register("help", lambda _: {"text": "help"})
+
+    def momentum_handler(_: str) -> dict[str, Any]:
+        calls.append(("scan", None))
+        return {"response_type": "ephemeral", "text": "scan complete"}
+
+    router.register("momentum", momentum_handler)
+
+    handle_slash_command(
+        lambda: calls.append(("ack", None)),
+        lambda message: calls.append(("respond", message)),
+        {"text": "momentum list file"},
+        router,
+    )
+
+    assert calls[0] == ("ack", None)
+    assert calls[1][0] == "respond"
+    assert "scan started" in calls[1][1]["text"]
+    assert calls[2] == ("scan", None)
+    assert calls[3] == (
+        "respond",
+        {"response_type": "ephemeral", "text": "scan complete"},
+    )
+
+
 def test_slash_command_is_logged(caplog: Any) -> None:
     command = {
         "command": "/swingengine",

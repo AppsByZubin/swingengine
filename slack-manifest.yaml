@@ -14,7 +14,7 @@ features:
   slash_commands:
     - command: /swingengine
       description: Send a command to SwingEngine
-      usage_hint: help | auth … | instrument refresh|search | asset add|delete|list [file]|upload | tracker add|delete|list [file]|upload
+      usage_hint: help | auth … | instrument refresh|search | asset add|delete|list [file]|upload | momentum list file | tracker add|delete|list [file]|upload
       should_escape: false
 
 oauth_config:

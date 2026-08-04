@@ -1,7 +1,9 @@
-"""Upstox HTTP client for authorization and daily candle retrieval."""
+"""Upstox HTTP client for authorization, candles, and market quotes."""
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from math import isfinite
 from threading import Lock
 from typing import Any
 from urllib.parse import quote
@@ -33,6 +35,15 @@ class DailyCandle:
     close: float
     volume: float
     open_interest: float
+
+
+@dataclass(frozen=True, slots=True)
+class DailyMarketQuote:
+    """Latest price and current daily candle for one instrument."""
+
+    instrument_key: str
+    last_price: float
+    candle: DailyCandle
 
 
 class UpstoxAuthClient:
@@ -173,22 +184,76 @@ class UpstoxAuthClient:
         by_date = {candle.timestamp.date(): candle for candle in candles}
         return [by_date[trading_date] for trading_date in sorted(by_date)]
 
+    def get_historical_daily_candles(
+        self,
+        access_token: str,
+        instrument_key: str,
+        from_date: date,
+        through_date: date,
+    ) -> list[DailyCandle]:
+        """Return historical daily candles without an intraday API call."""
+        if from_date > through_date:
+            raise ValueError("from_date cannot be after through_date")
+        encoded_key = quote(instrument_key, safe="")
+        url = (
+            f"{self.settings.api_base_url}/v3/historical-candle/"
+            f"{encoded_key}/days/1/{through_date.isoformat()}/"
+            f"{from_date.isoformat()}"
+        )
+        payload = self._authorized_get(
+            url,
+            access_token,
+            "historical candle",
+        )
+        candles = self._daily_candles(payload, "historical candle")
+        by_date = {candle.timestamp.date(): candle for candle in candles}
+        return [by_date[trading_date] for trading_date in sorted(by_date)]
+
+    def get_daily_market_quotes(
+        self,
+        access_token: str,
+        instrument_keys: Sequence[str],
+    ) -> dict[str, DailyMarketQuote]:
+        """Return V3 daily OHLC/LTP snapshots for up to 500 instruments."""
+        keys = tuple(str(key).strip() for key in instrument_keys)
+        if not keys or any(not key for key in keys):
+            raise ValueError("instrument_keys must contain non-empty keys")
+        if len(keys) > 500:
+            raise ValueError("at most 500 instrument keys can be requested")
+        if len(set(keys)) != len(keys):
+            raise ValueError("instrument_keys must be unique")
+
+        url = f"{self.settings.api_base_url}/v3/market-quote/ohlc"
+        payload = self._authorized_get(
+            url,
+            access_token,
+            "daily market quote",
+            params={"instrument_key": ",".join(keys), "interval": "1d"},
+        )
+        return self._daily_market_quotes(payload)
+
     def _authorized_get(
         self,
         url: str,
         access_token: str,
         operation: str,
+        params: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
+        request_arguments: dict[str, Any] = {
+            "headers": {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {access_token}",
+            },
+            "timeout": self.settings.request_timeout_seconds,
+        }
+        if params is not None:
+            request_arguments["params"] = params
         try:
             with self._request_lock:
                 response = self._session.get(
                     url,
-                    headers={
-                        "Accept": "application/json",
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {access_token}",
-                    },
-                    timeout=self.settings.request_timeout_seconds,
+                    **request_arguments,
                 )
         except requests.RequestException as error:
             raise UpstoxAPIError(
@@ -201,6 +266,69 @@ class UpstoxAuthClient:
                 response.status_code,
             )
         return self._json_object(response, operation)
+
+    @staticmethod
+    def _daily_market_quotes(
+        payload: dict[str, Any],
+    ) -> dict[str, DailyMarketQuote]:
+        data = payload.get("data")
+        if payload.get("status") != "success" or not isinstance(data, dict):
+            raise UpstoxAPIError(
+                "Upstox daily market quote returned an invalid response"
+            )
+
+        quotes: dict[str, DailyMarketQuote] = {}
+        try:
+            for raw_quote in data.values():
+                if not isinstance(raw_quote, dict):
+                    raise ValueError
+                instrument_key = str(
+                    raw_quote.get("instrument_token", "")
+                ).strip()
+                live_ohlc = raw_quote.get("live_ohlc")
+                if not instrument_key or not isinstance(live_ohlc, dict):
+                    raise ValueError
+
+                last_price = float(raw_quote["last_price"])
+                timestamp_milliseconds = int(live_ohlc["ts"])
+                numeric_values = [
+                    float(live_ohlc[name])
+                    for name in ("open", "high", "low", "close", "volume")
+                ]
+                if not isfinite(last_price) or not all(
+                    isfinite(value) for value in numeric_values
+                ):
+                    raise ValueError
+                if instrument_key in quotes:
+                    raise ValueError
+
+                quotes[instrument_key] = DailyMarketQuote(
+                    instrument_key=instrument_key,
+                    last_price=last_price,
+                    candle=DailyCandle(
+                        timestamp=datetime.fromtimestamp(
+                            timestamp_milliseconds / 1000,
+                            tz=UTC,
+                        ),
+                        open=numeric_values[0],
+                        high=numeric_values[1],
+                        low=numeric_values[2],
+                        close=numeric_values[3],
+                        volume=numeric_values[4],
+                        open_interest=0.0,
+                    ),
+                )
+        except (
+            KeyError,
+            OSError,
+            TypeError,
+            ValueError,
+            OverflowError,
+        ) as error:
+            raise UpstoxAPIError(
+                "Upstox daily market quote returned invalid quote data"
+            ) from error
+        return quotes
 
     @staticmethod
     def _daily_candles(

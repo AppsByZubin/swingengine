@@ -63,6 +63,19 @@ def _parse_float(
     return parsed
 
 
+def _parse_positive_float(
+    values: Mapping[str, str],
+    name: str,
+    default: float,
+    errors: list[str],
+) -> float:
+    parsed = _parse_float(values, name, default, errors)
+    if parsed <= 0:
+        errors.append(f"{name} must be greater than zero")
+        return default
+    return parsed
+
+
 @dataclass(frozen=True)
 class TrackerEvaluationSettings:
     """Schedule and strategy settings for the daily momentum screen."""
@@ -73,6 +86,7 @@ class TrackerEvaluationSettings:
     lookback_days: int
     ema_angle_threshold: float
     sma_angle_threshold: float
+    momentum_scan_request_interval_seconds: float
     retry_interval_seconds: int
     poll_interval_seconds: int
 
@@ -132,6 +146,12 @@ class TrackerEvaluationSettings:
             50.0,
             errors,
         )
+        momentum_scan_request_interval_seconds = _parse_positive_float(
+            values,
+            "SWINGENGINE_MOMENTUM_SCAN_REQUEST_INTERVAL_SECONDS",
+            1.0,
+            errors,
+        )
         retry_interval_seconds = _parse_positive_int(
             values,
             "SWINGENGINE_TRACKER_EVALUATION_RETRY_INTERVAL_SECONDS",
@@ -154,6 +174,9 @@ class TrackerEvaluationSettings:
             lookback_days=lookback_days,
             ema_angle_threshold=ema_angle_threshold,
             sma_angle_threshold=sma_angle_threshold,
+            momentum_scan_request_interval_seconds=(
+                momentum_scan_request_interval_seconds
+            ),
             retry_interval_seconds=retry_interval_seconds,
             poll_interval_seconds=poll_interval_seconds,
         )

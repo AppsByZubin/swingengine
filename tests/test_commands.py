@@ -11,6 +11,11 @@ from database.repository import (
 )
 from slack.commands import CommandRouter, build_router, ephemeral
 from slack.file_exports import CsvFileExporter, SlackFileUpload
+from tracker.momentum_scanner import (
+    MomentumScanError,
+    MomentumScanResult,
+    MomentumStock,
+)
 from upstox.assets import AssetCatalogError, AssetSearchResult
 
 
@@ -128,6 +133,23 @@ class FakeEvaluationService:
         )
 
 
+class FakeMomentumService:
+    def scan(self) -> MomentumScanResult:
+        return MomentumScanResult(
+            catalog_instruments=12_345,
+            equity_assets=2,
+            evaluated=2,
+            failed=0,
+            stocks=(
+                MomentumStock(
+                    asset_name="SUN PHARMACEUTICAL IND L",
+                    trading_symbol="SUNPHARMA",
+                    ltp=1789.25,
+                ),
+            ),
+        )
+
+
 def test_empty_command_shows_help() -> None:
     response = build_router().dispatch("")
 
@@ -150,6 +172,7 @@ def test_help_lists_every_supported_command_and_disabled_workflow() -> None:
         "• `/swingengine asset delete <trading_symbol>`",
         "• `/swingengine asset list`",
         "• `/swingengine asset upload`",
+        "• `/swingengine momentum list file`",
         "• `/swingengine tracker add <trading_symbol>`",
         "• `/swingengine tracker delete <trading_symbol>`",
         "• `/swingengine tracker asset evaluate`",
@@ -448,6 +471,46 @@ def test_tracker_asset_evaluate_requires_exact_command_and_service() -> None:
     assert "tracker asset evaluate" in router.dispatch(
         "tracker asset refresh"
     )["text"]
+
+
+def test_momentum_list_file_runs_scan_and_requests_csv_upload(tmp_path) -> None:
+    response = build_router(
+        file_exporter=CsvFileExporter(tmp_path),
+        momentum_service=FakeMomentumService(),
+    ).dispatch("momentum list file")
+
+    upload = response["_file_upload"]
+    assert isinstance(upload, SlackFileUpload)
+    assert upload.path == tmp_path / "momentum-list.csv"
+    assert "Momentum: 1" in upload.initial_comment
+    assert "2 of 2" in response["text"]
+    assert "Momentum: 1" in response["text"]
+    assert "failed: 0" in response["text"]
+
+
+def test_momentum_list_file_reports_scan_failure() -> None:
+    class FailingMomentumService:
+        def scan(self) -> MomentumScanResult:
+            raise MomentumScanError("Upstox quotes failed.")
+
+    response = build_router(
+        file_exporter=CsvFileExporter("unused"),
+        momentum_service=FailingMomentumService(),
+    ).dispatch("momentum list file")
+
+    assert response == ephemeral(":warning: Upstox quotes failed.")
+
+
+def test_momentum_command_requires_exact_arguments_and_services(tmp_path) -> None:
+    assert "momentum list file" in build_router().dispatch(
+        "momentum list"
+    )["text"]
+    assert "not configured" in build_router(
+        file_exporter=CsvFileExporter(tmp_path)
+    ).dispatch("momentum list file")["text"]
+    assert "not configured" in build_router(
+        momentum_service=FakeMomentumService()
+    ).dispatch("momentum list file")["text"]
 
 
 def test_list_file_requires_csv_export_configuration() -> None:

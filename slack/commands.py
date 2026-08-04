@@ -19,6 +19,10 @@ from slack.file_exports import (
     FileExportError,
     SlackFileUpload,
 )
+from tracker.momentum_scanner import (
+    MomentumScanError,
+    MomentumScanResult,
+)
 from upstox.assets import AssetCatalogError, AssetSearchResult
 
 SlackResponse = dict[str, Any]
@@ -77,6 +81,11 @@ class TrackerEvaluationService(Protocol):
         """Run the tracker momentum screen and return a Slack summary."""
 
 
+class MomentumScanService(Protocol):
+    def scan(self) -> MomentumScanResult:
+        """Screen every NSE equity and return momentum export rows."""
+
+
 def ephemeral(text: str) -> SlackResponse:
     """Build a response visible only to the user who ran the command."""
     return {"response_type": "ephemeral", "text": text}
@@ -130,6 +139,9 @@ def help_command(_: str = "") -> SlackResponse:
         "• `/swingengine asset list` — list saved assets\n"
         "• `/swingengine asset list file` — return saved assets as CSV\n"
         "• `/swingengine asset upload` — upload an add/delete CSV\n\n"
+        "*Momentum*\n"
+        "• `/swingengine momentum list file` — refresh NSE instruments, "
+        "screen all equities, and upload qualifying stocks as CSV\n\n"
         "*Tracker*\n"
         "• `/swingengine tracker add <trading_symbol>` — start tracking a "
         "saved asset\n"
@@ -467,6 +479,45 @@ def tracker_command(
     )
 
 
+def momentum_command(
+    arguments: str = "",
+    momentum_service: MomentumScanService | None = None,
+    file_exporter: CsvFileExporter | None = None,
+) -> SlackResponse:
+    if arguments.strip().casefold() != "list file":
+        return ephemeral("Use `/swingengine momentum list file`.")
+    if momentum_service is None:
+        return ephemeral("NSE momentum evaluation is not configured.")
+    if file_exporter is None:
+        return ephemeral("CSV file export is not configured.")
+
+    try:
+        result = momentum_service.scan()
+    except MomentumScanError as error:
+        return ephemeral(f":warning: {error}")
+    try:
+        upload = file_exporter.export_momentum(result.stocks)
+    except FileExportError as error:
+        return ephemeral(f":warning: {error}")
+
+    prefix = ":warning:" if result.failed else ":white_check_mark:"
+    summary = (
+        f"{prefix} NSE momentum scan completed for "
+        f"{result.evaluated:,} of {result.equity_assets:,} equity "
+        f"asset(s). Momentum: {len(result.stocks):,}; "
+        f"failed: {result.failed:,}. CSV uploaded."
+    )
+    upload = SlackFileUpload(
+        path=upload.path,
+        title=upload.title,
+        initial_comment=summary,
+    )
+    return file_upload_response(
+        summary,
+        upload,
+    )
+
+
 def _format_asset(asset: AssetSearchResult) -> str:
     symbol = asset.trading_symbol or "(no trading symbol)"
     name = asset.name
@@ -564,6 +615,7 @@ def build_router(
     tracker_service: AssetTrackerService | None = None,
     file_exporter: CsvFileExporter | None = None,
     evaluation_service: TrackerEvaluationService | None = None,
+    momentum_service: MomentumScanService | None = None,
 ) -> CommandRouter:
     router = CommandRouter()
     router.register("help", help_command)
@@ -586,6 +638,14 @@ def build_router(
             arguments,
             asset_service,
             tracker_service,
+            file_exporter,
+        ),
+    )
+    router.register(
+        "momentum",
+        lambda arguments: momentum_command(
+            arguments,
+            momentum_service,
             file_exporter,
         ),
     )
