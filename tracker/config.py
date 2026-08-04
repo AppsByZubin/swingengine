@@ -86,6 +86,7 @@ class TrackerEvaluationSettings:
     lookback_days: int
     ema_angle_threshold: float
     sma_angle_threshold: float
+    momentum_scan_lookback_days: int
     momentum_scan_request_interval_seconds: float
     retry_interval_seconds: int
     poll_interval_seconds: int
@@ -152,6 +153,16 @@ class TrackerEvaluationSettings:
             1.0,
             errors,
         )
+        momentum_scan_lookback_days = _parse_positive_int(
+            values,
+            "SWINGENGINE_MOMENTUM_SCAN_LOOKBACK_DAYS",
+            365,
+            errors,
+        )
+        if momentum_scan_lookback_days < 200:
+            errors.append(
+                "SWINGENGINE_MOMENTUM_SCAN_LOOKBACK_DAYS must be at least 200"
+            )
         retry_interval_seconds = _parse_positive_int(
             values,
             "SWINGENGINE_TRACKER_EVALUATION_RETRY_INTERVAL_SECONDS",
@@ -174,6 +185,7 @@ class TrackerEvaluationSettings:
             lookback_days=lookback_days,
             ema_angle_threshold=ema_angle_threshold,
             sma_angle_threshold=sma_angle_threshold,
+            momentum_scan_lookback_days=momentum_scan_lookback_days,
             momentum_scan_request_interval_seconds=(
                 momentum_scan_request_interval_seconds
             ),

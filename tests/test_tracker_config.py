@@ -17,6 +17,7 @@ def test_tracker_evaluation_defaults_to_weekday_post_market_settings() -> None:
     assert settings.lookback_days == 200
     assert settings.ema_angle_threshold == 70
     assert settings.sma_angle_threshold == 50
+    assert settings.momentum_scan_lookback_days == 365
     assert settings.momentum_scan_request_interval_seconds == 1
 
 
@@ -31,6 +32,7 @@ def test_tracker_evaluation_defaults_to_weekday_post_market_settings() -> None:
         ("SWINGENGINE_TRACKER_EMA_ANGLE_THRESHOLD", "steep"),
         ("SWINGENGINE_TRACKER_EMA_ANGLE_THRESHOLD", "nan"),
         ("SWINGENGINE_MOMENTUM_SCAN_REQUEST_INTERVAL_SECONDS", "0"),
+        ("SWINGENGINE_MOMENTUM_SCAN_LOOKBACK_DAYS", "199"),
     ],
 )
 def test_invalid_tracker_evaluation_configuration_is_rejected(

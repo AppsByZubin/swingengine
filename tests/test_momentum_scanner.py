@@ -110,7 +110,7 @@ class Client:
             key: quote(
                 key.removeprefix("NSE_EQ|"),
                 (
-                    100 + 59 * 20
+                    100 + 199 * 20
                     if key.endswith("RISING")
                     else 100
                 ),
@@ -132,8 +132,10 @@ class Client:
         if symbol == "BAD":
             raise UpstoxAPIError("historical request failed", 500)
         if symbol == "RISING":
-            return candles([100 + index * 20 for index in range(59)])
-        return candles([100.0] * 59)
+            return candles([100 + index * 20 for index in range(199)])
+        if symbol == "SHORT":
+            return candles([100.0] * 198)
+        return candles([100.0] * 199)
 
 
 def settings() -> TrackerEvaluationSettings:
@@ -169,13 +171,14 @@ def test_scanner_refreshes_first_and_exports_only_momentum(
     assert result.catalog_instruments == 12_345
     assert result.equity_assets == 2
     assert result.evaluated == 2
+    assert result.ineligible == 0
     assert result.failed == 0
     assert [stock.trading_symbol for stock in result.stocks] == ["RISING"]
-    assert result.stocks[0].ltp == 1280
+    assert result.stocks[0].ltp == 4080
     assert sleep_calls == [1.0]
     assert client.ranges == [
-        ("RISING", date(2026, 1, 12), date(2026, 7, 29)),
-        ("FLAT", date(2026, 1, 12), date(2026, 7, 29)),
+        ("RISING", date(2025, 7, 31), date(2026, 7, 29)),
+        ("FLAT", date(2025, 7, 31), date(2026, 7, 29)),
     ]
     assert "Starting NSE equity momentum scan" in caplog.text
     assert "NSE equity momentum scan progress" in caplog.text
@@ -219,6 +222,33 @@ def test_scanner_refreshes_before_rejecting_an_invalid_token() -> None:
         scanner.scan(now=datetime(2026, 7, 30, 11, tzinfo=UTC))
 
     assert events == ["refresh", "list_equities", "load_token"]
+
+
+def test_scanner_marks_assets_below_200_candles_as_ineligible(
+    caplog: Any,
+) -> None:
+    events: list[str] = []
+    scanner = NSEMomentumScanner(
+        settings(),
+        Catalog(events, [asset("SHORT")]),
+        Client(events),
+        Store(events),
+        request_interval_seconds=0,
+        progress_interval=1,
+    )
+
+    with caplog.at_level(logging.INFO, logger="tracker.momentum_scanner"):
+        result = scanner.scan(
+            now=datetime(2026, 7, 30, 11, tzinfo=UTC)
+        )
+
+    assert result.evaluated == 0
+    assert result.ineligible == 1
+    assert result.failed == 0
+    assert result.stocks == ()
+    assert "insufficient daily history" in caplog.text
+    assert "candles=199 required=200" in caplog.text
+    assert "Traceback" not in caplog.text
 
 
 def test_scanner_fails_when_no_market_quote_batch_succeeds() -> None:

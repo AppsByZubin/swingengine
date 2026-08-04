@@ -30,6 +30,7 @@ LOGGER = logging.getLogger(__name__)
 
 QUOTE_BATCH_SIZE = 500
 DEFAULT_PROGRESS_INTERVAL = 100
+MINIMUM_MOMENTUM_CANDLES = 200
 
 
 class MomentumScanError(RuntimeError):
@@ -54,6 +55,7 @@ class MomentumScanResult:
     evaluated: int
     failed: int
     stocks: tuple[MomentumStock, ...]
+    ineligible: int = 0
 
 
 class EquityCatalog(Protocol):
@@ -139,18 +141,20 @@ class NSEMomentumScanner:
         local_timezone = ZoneInfo(self.settings.timezone_name)
         local_date = current.astimezone(local_timezone).date()
         from_date = local_date - timedelta(
-            days=self.settings.lookback_days - 1
+            days=self.settings.momentum_scan_lookback_days - 1
         )
         historical_through_date = local_date - timedelta(days=1)
         LOGGER.info(
             "Starting NSE equity momentum scan local_date=%s from_date=%s "
             "historical_through_date=%s ema_angle_threshold=%.2f "
-            "sma_angle_threshold=%.2f request_interval_seconds=%.3f",
+            "sma_angle_threshold=%.2f minimum_candles=%d "
+            "request_interval_seconds=%.3f",
             local_date,
             from_date,
             historical_through_date,
             self.settings.ema_angle_threshold,
             self.settings.sma_angle_threshold,
+            MINIMUM_MOMENTUM_CANDLES,
             self.request_interval_seconds,
         )
         try:
@@ -162,7 +166,7 @@ class NSEMomentumScanner:
                     "Unable to fetch NSE equity market quotes from Upstox."
                 )
 
-            stocks, evaluated, failed = self._evaluate_equities(
+            stocks, evaluated, ineligible, failed = self._evaluate_equities(
                 token_state.access_token,
                 equities,
                 quotes,
@@ -179,15 +183,18 @@ class NSEMomentumScanner:
                 evaluated=evaluated,
                 failed=failed,
                 stocks=tuple(stocks),
+                ineligible=ineligible,
             )
             LOGGER.info(
                 "Completed NSE equity momentum scan catalog_instruments=%d "
-                "equity_assets=%d evaluated=%d momentum=%d failed=%d "
+                "equity_assets=%d evaluated=%d momentum=%d ineligible=%d "
+                "failed=%d "
                 "elapsed_seconds=%.2f",
                 result.catalog_instruments,
                 result.equity_assets,
                 result.evaluated,
                 len(result.stocks),
+                result.ineligible,
                 result.failed,
                 monotonic() - started_at,
             )
@@ -308,9 +315,9 @@ class NSEMomentumScanner:
         local_date: date,
         local_timezone: ZoneInfo,
         started_at: float,
-    ) -> tuple[list[MomentumStock], int, int]:
+    ) -> tuple[list[MomentumStock], int, int, int]:
         stocks: list[MomentumStock] = []
-        evaluated = failed = historical_requests = 0
+        evaluated = ineligible = failed = historical_requests = 0
         total = len(equities)
         seen_instrument_keys: set[str] = set()
 
@@ -327,7 +334,13 @@ class NSEMomentumScanner:
                     asset.name,
                 )
                 self._log_progress(
-                    index, total, evaluated, len(stocks), failed, started_at
+                    index,
+                    total,
+                    evaluated,
+                    len(stocks),
+                    ineligible,
+                    failed,
+                    started_at,
                 )
                 continue
             if instrument_key in seen_instrument_keys:
@@ -341,7 +354,13 @@ class NSEMomentumScanner:
                     instrument_key,
                 )
                 self._log_progress(
-                    index, total, evaluated, len(stocks), failed, started_at
+                    index,
+                    total,
+                    evaluated,
+                    len(stocks),
+                    ineligible,
+                    failed,
+                    started_at,
                 )
                 continue
             seen_instrument_keys.add(instrument_key)
@@ -358,7 +377,13 @@ class NSEMomentumScanner:
                     instrument_key,
                 )
                 self._log_progress(
-                    index, total, evaluated, len(stocks), failed, started_at
+                    index,
+                    total,
+                    evaluated,
+                    len(stocks),
+                    ineligible,
+                    failed,
+                    started_at,
                 )
                 continue
 
@@ -378,6 +403,29 @@ class NSEMomentumScanner:
                     local_date,
                     local_timezone,
                 )
+                if len(candles) < MINIMUM_MOMENTUM_CANDLES:
+                    ineligible += 1
+                    LOGGER.info(
+                        "Skipping NSE equity with insufficient daily history "
+                        "index=%d/%d trading_symbol=%r instrument_key=%r "
+                        "candles=%d required=%d",
+                        index,
+                        total,
+                        asset.trading_symbol,
+                        instrument_key,
+                        len(candles),
+                        MINIMUM_MOMENTUM_CANDLES,
+                    )
+                    self._log_progress(
+                        index,
+                        total,
+                        evaluated,
+                        len(stocks),
+                        ineligible,
+                        failed,
+                        started_at,
+                    )
+                    continue
                 indicators = calculate_momentum_indicators(candles)
                 has_momentum = (
                     indicators.ema_21_angle
@@ -397,7 +445,13 @@ class NSEMomentumScanner:
                     exc_info=True,
                 )
                 self._log_progress(
-                    index, total, evaluated, len(stocks), failed, started_at
+                    index,
+                    total,
+                    evaluated,
+                    len(stocks),
+                    ineligible,
+                    failed,
+                    started_at,
                 )
                 continue
 
@@ -427,9 +481,15 @@ class NSEMomentumScanner:
                 has_momentum,
             )
             self._log_progress(
-                index, total, evaluated, len(stocks), failed, started_at
+                index,
+                total,
+                evaluated,
+                len(stocks),
+                ineligible,
+                failed,
+                started_at,
             )
-        return stocks, evaluated, failed
+        return stocks, evaluated, ineligible, failed
 
     def _log_progress(
         self,
@@ -437,6 +497,7 @@ class NSEMomentumScanner:
         total: int,
         evaluated: int,
         momentum: int,
+        ineligible: int,
         failed: int,
         started_at: float,
     ) -> None:
@@ -444,11 +505,13 @@ class NSEMomentumScanner:
             return
         LOGGER.info(
             "NSE equity momentum scan progress processed=%d/%d "
-            "evaluated=%d momentum=%d failed=%d elapsed_seconds=%.2f",
+            "evaluated=%d momentum=%d ineligible=%d failed=%d "
+            "elapsed_seconds=%.2f",
             processed,
             total,
             evaluated,
             momentum,
+            ineligible,
             failed,
             monotonic() - started_at,
         )

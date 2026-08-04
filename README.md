@@ -150,9 +150,13 @@ instrument catalogue:
 The command refreshes `NSE.json` first, selects rows where `segment = NSE_EQ`
 and `instrument_type = EQ`, and obtains the current daily OHLC/LTP in batches.
 It then requests daily history for each equity and applies the same EMA-21 and
-SMA-50 angle thresholds as the tracker evaluator. The current daily quote is
-included only when it represents a newer trading session than the historical
-candles, so weekends and market holidays do not duplicate the last session.
+SMA-50 angle thresholds as the tracker evaluator. The scanner requests 365
+calendar days so established equities normally provide at least 200 trading
+sessions, and it evaluates only assets with 200 or more daily candles. The
+current daily quote is included only when it represents a newer trading
+session than the historical candles, so weekends and market holidays do not
+duplicate the last session. New listings with fewer than 200 candles are
+reported as ineligible rather than failed.
 
 Qualifying equities are uploaded as `momentum-list.csv` with exactly these
 columns:
@@ -168,6 +172,7 @@ limit, so a full NSE scan can take tens of minutes. Override the spacing only
 when the account's available request budget is known:
 
 ```bash
+export SWINGENGINE_MOMENTUM_SCAN_LOOKBACK_DAYS=365
 export SWINGENGINE_MOMENTUM_SCAN_REQUEST_INTERVAL_SECONDS=1.0
 ```
 
@@ -232,6 +237,7 @@ export SWINGENGINE_TRACKER_EVALUATION_TIMEZONE=Asia/Kolkata
 export SWINGENGINE_TRACKER_EVALUATION_LOOKBACK_DAYS=200
 export SWINGENGINE_TRACKER_EMA_ANGLE_THRESHOLD=70
 export SWINGENGINE_TRACKER_SMA_ANGLE_THRESHOLD=50
+export SWINGENGINE_MOMENTUM_SCAN_LOOKBACK_DAYS=365
 export SWINGENGINE_MOMENTUM_SCAN_REQUEST_INTERVAL_SECONDS=1.0
 export SWINGENGINE_TRACKER_EVALUATION_RETRY_INTERVAL_SECONDS=300
 export SWINGENGINE_TRACKER_EVALUATION_POLL_INTERVAL_SECONDS=30

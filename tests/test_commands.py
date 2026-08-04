@@ -485,6 +485,7 @@ def test_momentum_list_file_runs_scan_and_requests_csv_upload(tmp_path) -> None:
     assert "Momentum: 1" in upload.initial_comment
     assert "2 of 2" in response["text"]
     assert "Momentum: 1" in response["text"]
+    assert "ineligible (<200 candles): 0" in response["text"]
     assert "failed: 0" in response["text"]
 
 
