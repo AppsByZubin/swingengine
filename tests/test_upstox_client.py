@@ -1,19 +1,32 @@
 from dataclasses import replace
 from datetime import date
+import logging
+from typing import Any
 
 import pytest
+import requests
 
 from upstox.client import UpstoxAPIError, UpstoxAuthClient
 from upstox.config import UpstoxSettings
 
 
 class FakeResponse:
-    def __init__(self, status_code: int, payload: object):
+    def __init__(
+        self,
+        status_code: int,
+        payload: object,
+        headers: dict[str, str] | None = None,
+    ):
         self.status_code = status_code
         self.payload = payload
+        self.headers = headers or {}
+        self.closed = False
 
     def json(self) -> object:
         return self.payload
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class RecordingSession:
@@ -204,3 +217,151 @@ def test_daily_market_quotes_reject_more_than_500_keys() -> None:
             "approved-token",
             [f"NSE_EQ|{index}" for index in range(501)],
         )
+
+
+def test_market_data_get_retries_a_disconnected_connection(
+    caplog: Any,
+) -> None:
+    session = RecordingSession()
+    successful_response = FakeResponse(
+        200,
+        {
+            "status": "success",
+            "data": {
+                "candles": [
+                    [
+                        "2026-07-29T00:00:00+05:30",
+                        100,
+                        110,
+                        95,
+                        108,
+                        1000,
+                        0,
+                    ]
+                ]
+            },
+        },
+    )
+    outcomes: list[Exception | FakeResponse] = [
+        requests.ConnectionError("remote closed connection"),
+        successful_response,
+    ]
+
+    def flaky_get(url: str, **kwargs: object) -> FakeResponse:
+        session.get_calls.append((url, kwargs))
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    session.get = flaky_get  # type: ignore[method-assign]
+    sleep_calls: list[float] = []
+    client = UpstoxAuthClient(
+        settings(),
+        session,  # type: ignore[arg-type]
+        sleep_function=sleep_calls.append,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="upstox.client"):
+        candles = client.get_historical_daily_candles(
+            "approved-token",
+            "NSE_EQ|INE044A01036",
+            date(2025, 7, 31),
+            date(2026, 7, 29),
+        )
+
+    assert len(candles) == 1
+    assert len(session.get_calls) == 2
+    assert sleep_calls == [1.0]
+    assert "Retrying Upstox historical candle request" in caplog.text
+    assert "error=ConnectionError" in caplog.text
+    assert "approved-token" not in caplog.text
+
+
+def test_market_data_get_uses_retry_after_for_rate_limit() -> None:
+    session = RecordingSession()
+    rate_limited_response = FakeResponse(
+        429,
+        {"status": "error"},
+        headers={"Retry-After": "3"},
+    )
+    successful_response = FakeResponse(
+        200,
+        {"status": "success", "data": {"candles": []}},
+    )
+    outcomes = [rate_limited_response, successful_response]
+
+    def rate_limited_get(url: str, **kwargs: object) -> FakeResponse:
+        session.get_calls.append((url, kwargs))
+        return outcomes.pop(0)
+
+    session.get = rate_limited_get  # type: ignore[method-assign]
+    sleep_calls: list[float] = []
+    client = UpstoxAuthClient(
+        settings(),
+        session,  # type: ignore[arg-type]
+        sleep_function=sleep_calls.append,
+    )
+
+    candles = client.get_historical_daily_candles(
+        "approved-token",
+        "NSE_EQ|INE044A01036",
+        date(2025, 7, 31),
+        date(2026, 7, 29),
+    )
+
+    assert candles == []
+    assert len(session.get_calls) == 2
+    assert sleep_calls == [3.0]
+    assert rate_limited_response.closed
+
+
+def test_market_data_get_stops_after_three_transport_attempts() -> None:
+    session = RecordingSession()
+
+    def disconnected_get(url: str, **kwargs: object) -> FakeResponse:
+        session.get_calls.append((url, kwargs))
+        raise requests.ConnectionError("remote closed connection")
+
+    session.get = disconnected_get  # type: ignore[method-assign]
+    sleep_calls: list[float] = []
+    client = UpstoxAuthClient(
+        settings(),
+        session,  # type: ignore[arg-type]
+        sleep_function=sleep_calls.append,
+    )
+
+    with pytest.raises(UpstoxAPIError, match="could not be reached") as error:
+        client.get_historical_daily_candles(
+            "approved-token",
+            "NSE_EQ|INE044A01036",
+            date(2025, 7, 31),
+            date(2026, 7, 29),
+        )
+
+    assert error.value.status_code is None
+    assert len(session.get_calls) == 3
+    assert sleep_calls == [1.0, 2.0]
+
+
+def test_market_data_get_does_not_retry_permanent_http_error() -> None:
+    session = RecordingSession()
+    session.get_response = FakeResponse(401, {"status": "error"})
+    sleep_calls: list[float] = []
+    client = UpstoxAuthClient(
+        settings(),
+        session,  # type: ignore[arg-type]
+        sleep_function=sleep_calls.append,
+    )
+
+    with pytest.raises(UpstoxAPIError, match="HTTP 401") as error:
+        client.get_historical_daily_candles(
+            "approved-token",
+            "NSE_EQ|INE044A01036",
+            date(2025, 7, 31),
+            date(2026, 7, 29),
+        )
+
+    assert error.value.status_code == 401
+    assert len(session.get_calls) == 1
+    assert sleep_calls == []

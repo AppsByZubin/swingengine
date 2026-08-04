@@ -505,7 +505,8 @@ def momentum_command(
         f"{prefix} NSE momentum scan completed for "
         f"{result.evaluated:,} of {result.equity_assets:,} equity "
         f"asset(s). Momentum: {len(result.stocks):,}; "
-        f"ineligible (<200 candles): {result.ineligible:,}; "
+        f"ineligible (<{result.minimum_candles} candles): "
+        f"{result.ineligible:,}; "
         f"failed: {result.failed:,}. CSV uploaded."
     )
     upload = SlackFileUpload(

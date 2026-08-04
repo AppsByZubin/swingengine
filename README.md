@@ -151,12 +151,11 @@ The command refreshes `NSE.json` first, selects rows where `segment = NSE_EQ`
 and `instrument_type = EQ`, and obtains the current daily OHLC/LTP in batches.
 It then requests daily history for each equity and applies the same EMA-21 and
 SMA-50 angle thresholds as the tracker evaluator. The scanner requests 365
-calendar days so established equities normally provide at least 200 trading
-sessions, and it evaluates only assets with 200 or more daily candles. The
-current daily quote is included only when it represents a newer trading
-session than the historical candles, so weekends and market holidays do not
-duplicate the last session. New listings with fewer than 200 candles are
-reported as ineligible rather than failed.
+calendar days and, by default, evaluates only assets with 200 or more daily
+candles. The minimum is configurable. The current daily quote is included only
+when it represents a newer trading session than the historical candles, so
+weekends and market holidays do not duplicate the last session. New listings
+below the configured minimum are reported as ineligible rather than failed.
 
 Qualifying equities are uploaded as `momentum-list.csv` with exactly these
 columns:
@@ -173,6 +172,7 @@ when the account's available request budget is known:
 
 ```bash
 export SWINGENGINE_MOMENTUM_SCAN_LOOKBACK_DAYS=365
+export SWINGENGINE_MOMENTUM_SCAN_MINIMUM_CANDLES=200
 export SWINGENGINE_MOMENTUM_SCAN_REQUEST_INTERVAL_SECONDS=1.0
 ```
 
@@ -180,6 +180,9 @@ INFO logs mark scan start, catalogue refresh, quote batches, every 100
 processed equities, CSV generation, Slack upload, and final counts. Individual
 successful evaluations are available at DEBUG level; failed equities include
 their symbol, instrument key, and exception traceback at WARNING level.
+Transient Upstox market-data connection failures and HTTP 408, 425, 429, and
+5xx responses are attempted up to three times. Transport failures back off for
+one and then two seconds; HTTP 429 uses `Retry-After` when Upstox supplies it.
 
 The Slack administrator configured by `SLACK_ALERT_USER_ID` can update tracker
 approval and allocation values by exporting, editing, and uploading the tracker
@@ -238,6 +241,7 @@ export SWINGENGINE_TRACKER_EVALUATION_LOOKBACK_DAYS=200
 export SWINGENGINE_TRACKER_EMA_ANGLE_THRESHOLD=70
 export SWINGENGINE_TRACKER_SMA_ANGLE_THRESHOLD=50
 export SWINGENGINE_MOMENTUM_SCAN_LOOKBACK_DAYS=365
+export SWINGENGINE_MOMENTUM_SCAN_MINIMUM_CANDLES=200
 export SWINGENGINE_MOMENTUM_SCAN_REQUEST_INTERVAL_SECONDS=1.0
 export SWINGENGINE_TRACKER_EVALUATION_RETRY_INTERVAL_SECONDS=300
 export SWINGENGINE_TRACKER_EVALUATION_POLL_INTERVAL_SECONDS=30

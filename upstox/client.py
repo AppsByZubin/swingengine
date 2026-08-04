@@ -1,16 +1,25 @@
 """Upstox HTTP client for authorization, candles, and market quotes."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+import logging
 from math import isfinite
 from threading import Lock
+from time import sleep
 from typing import Any
 from urllib.parse import quote
 
 import requests
 
 from upstox.config import UpstoxSettings
+
+LOGGER = logging.getLogger(__name__)
+
+AUTHORIZED_GET_MAX_ATTEMPTS = 3
+AUTHORIZED_GET_BACKOFF_SECONDS = 1.0
+MAX_RETRY_AFTER_SECONDS = 60.0
+RETRIABLE_HTTP_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 
 class UpstoxAPIError(RuntimeError):
@@ -53,9 +62,12 @@ class UpstoxAuthClient:
         self,
         settings: UpstoxSettings,
         session: requests.Session | None = None,
+        *,
+        sleep_function: Callable[[float], None] = sleep,
     ):
         self.settings = settings
         self._session = session or requests.Session()
+        self._sleep = sleep_function
         self._request_lock = Lock()
 
     def request_access_token(self) -> TokenRequest:
@@ -249,23 +261,67 @@ class UpstoxAuthClient:
         }
         if params is not None:
             request_arguments["params"] = params
-        try:
-            with self._request_lock:
-                response = self._session.get(
+
+        for attempt in range(1, AUTHORIZED_GET_MAX_ATTEMPTS + 1):
+            try:
+                with self._request_lock:
+                    response = self._session.get(
+                        url,
+                        **request_arguments,
+                    )
+            except (requests.ConnectionError, requests.Timeout) as error:
+                if attempt < AUTHORIZED_GET_MAX_ATTEMPTS:
+                    delay = _retry_delay_seconds(attempt)
+                    LOGGER.warning(
+                        "Retrying Upstox %s request after transport failure "
+                        "attempt=%d/%d delay_seconds=%.2f error=%s url=%s",
+                        operation,
+                        attempt,
+                        AUTHORIZED_GET_MAX_ATTEMPTS,
+                        delay,
+                        type(error).__name__,
+                        url,
+                    )
+                    self._sleep(delay)
+                    continue
+                raise UpstoxAPIError(
+                    f"Upstox {operation} request could not be reached"
+                ) from error
+            except requests.RequestException as error:
+                raise UpstoxAPIError(
+                    f"Upstox {operation} request could not be reached"
+                ) from error
+
+            if response.status_code == 200:
+                return self._json_object(response, operation)
+            if (
+                response.status_code in RETRIABLE_HTTP_STATUS_CODES
+                and attempt < AUTHORIZED_GET_MAX_ATTEMPTS
+            ):
+                delay = _retry_delay_seconds(attempt, response)
+                LOGGER.warning(
+                    "Retrying Upstox %s request after HTTP response "
+                    "attempt=%d/%d delay_seconds=%.2f status_code=%d "
+                    "url=%s",
+                    operation,
+                    attempt,
+                    AUTHORIZED_GET_MAX_ATTEMPTS,
+                    delay,
+                    response.status_code,
                     url,
-                    **request_arguments,
                 )
-        except requests.RequestException as error:
-            raise UpstoxAPIError(
-                f"Upstox {operation} request could not be reached"
-            ) from error
-        if response.status_code != 200:
+                close_response = getattr(response, "close", None)
+                if callable(close_response):
+                    close_response()
+                self._sleep(delay)
+                continue
             raise UpstoxAPIError(
                 f"Upstox {operation} request returned HTTP "
                 f"{response.status_code}",
                 response.status_code,
             )
-        return self._json_object(response, operation)
+
+        raise AssertionError("authorized GET retry loop did not return or raise")
 
     @staticmethod
     def _daily_market_quotes(
@@ -381,3 +437,25 @@ class UpstoxAuthClient:
                 f"Upstox {operation} returned a non-object response"
             )
         return payload
+
+
+def _retry_delay_seconds(
+    attempt: int,
+    response: requests.Response | None = None,
+) -> float:
+    default_delay = AUTHORIZED_GET_BACKOFF_SECONDS * (2 ** (attempt - 1))
+    if response is None:
+        return default_delay
+    headers = getattr(response, "headers", None)
+    retry_after = (
+        headers.get("Retry-After")
+        if isinstance(headers, Mapping)
+        else None
+    )
+    try:
+        parsed_retry_after = float(retry_after)
+    except (TypeError, ValueError):
+        return default_delay
+    if not isfinite(parsed_retry_after) or parsed_retry_after < 0:
+        return default_delay
+    return min(parsed_retry_after, MAX_RETRY_AFTER_SECONDS)

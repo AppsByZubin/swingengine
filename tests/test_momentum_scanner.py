@@ -138,8 +138,10 @@ class Client:
         return candles([100.0] * 199)
 
 
-def settings() -> TrackerEvaluationSettings:
-    return TrackerEvaluationSettings.from_env({})
+def settings(
+    env: dict[str, str] | None = None,
+) -> TrackerEvaluationSettings:
+    return TrackerEvaluationSettings.from_env(env or {})
 
 
 def test_scanner_refreshes_first_and_exports_only_momentum(
@@ -249,6 +251,27 @@ def test_scanner_marks_assets_below_200_candles_as_ineligible(
     assert "insufficient daily history" in caplog.text
     assert "candles=199 required=200" in caplog.text
     assert "Traceback" not in caplog.text
+
+
+def test_scanner_uses_configured_minimum_candle_count(caplog: Any) -> None:
+    events: list[str] = []
+    scanner = NSEMomentumScanner(
+        settings({"SWINGENGINE_MOMENTUM_SCAN_MINIMUM_CANDLES": "100"}),
+        Catalog(events, [asset("SHORT")]),
+        Client(events),
+        Store(events),
+        request_interval_seconds=0,
+    )
+
+    with caplog.at_level(logging.INFO, logger="tracker.momentum_scanner"):
+        result = scanner.scan(
+            now=datetime(2026, 7, 30, 11, tzinfo=UTC)
+        )
+
+    assert result.evaluated == 1
+    assert result.ineligible == 0
+    assert result.minimum_candles == 100
+    assert "minimum_candles=100" in caplog.text
 
 
 def test_scanner_fails_when_no_market_quote_batch_succeeds() -> None:

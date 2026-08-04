@@ -30,7 +30,6 @@ LOGGER = logging.getLogger(__name__)
 
 QUOTE_BATCH_SIZE = 500
 DEFAULT_PROGRESS_INTERVAL = 100
-MINIMUM_MOMENTUM_CANDLES = 200
 
 
 class MomentumScanError(RuntimeError):
@@ -56,6 +55,7 @@ class MomentumScanResult:
     failed: int
     stocks: tuple[MomentumStock, ...]
     ineligible: int = 0
+    minimum_candles: int = 200
 
 
 class EquityCatalog(Protocol):
@@ -154,7 +154,7 @@ class NSEMomentumScanner:
             historical_through_date,
             self.settings.ema_angle_threshold,
             self.settings.sma_angle_threshold,
-            MINIMUM_MOMENTUM_CANDLES,
+            self.settings.momentum_scan_minimum_candles,
             self.request_interval_seconds,
         )
         try:
@@ -184,6 +184,9 @@ class NSEMomentumScanner:
                 failed=failed,
                 stocks=tuple(stocks),
                 ineligible=ineligible,
+                minimum_candles=(
+                    self.settings.momentum_scan_minimum_candles
+                ),
             )
             LOGGER.info(
                 "Completed NSE equity momentum scan catalog_instruments=%d "
@@ -403,7 +406,10 @@ class NSEMomentumScanner:
                     local_date,
                     local_timezone,
                 )
-                if len(candles) < MINIMUM_MOMENTUM_CANDLES:
+                if (
+                    len(candles)
+                    < self.settings.momentum_scan_minimum_candles
+                ):
                     ineligible += 1
                     LOGGER.info(
                         "Skipping NSE equity with insufficient daily history "
@@ -414,7 +420,7 @@ class NSEMomentumScanner:
                         asset.trading_symbol,
                         instrument_key,
                         len(candles),
-                        MINIMUM_MOMENTUM_CANDLES,
+                        self.settings.momentum_scan_minimum_candles,
                     )
                     self._log_progress(
                         index,

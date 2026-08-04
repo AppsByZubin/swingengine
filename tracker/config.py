@@ -87,6 +87,7 @@ class TrackerEvaluationSettings:
     ema_angle_threshold: float
     sma_angle_threshold: float
     momentum_scan_lookback_days: int
+    momentum_scan_minimum_candles: int
     momentum_scan_request_interval_seconds: float
     retry_interval_seconds: int
     poll_interval_seconds: int
@@ -159,9 +160,16 @@ class TrackerEvaluationSettings:
             365,
             errors,
         )
-        if momentum_scan_lookback_days < 200:
+        momentum_scan_minimum_candles = _parse_positive_int(
+            values,
+            "SWINGENGINE_MOMENTUM_SCAN_MINIMUM_CANDLES",
+            200,
+            errors,
+        )
+        if momentum_scan_lookback_days < momentum_scan_minimum_candles:
             errors.append(
-                "SWINGENGINE_MOMENTUM_SCAN_LOOKBACK_DAYS must be at least 200"
+                "SWINGENGINE_MOMENTUM_SCAN_LOOKBACK_DAYS must be greater "
+                "than or equal to SWINGENGINE_MOMENTUM_SCAN_MINIMUM_CANDLES"
             )
         retry_interval_seconds = _parse_positive_int(
             values,
@@ -186,6 +194,7 @@ class TrackerEvaluationSettings:
             ema_angle_threshold=ema_angle_threshold,
             sma_angle_threshold=sma_angle_threshold,
             momentum_scan_lookback_days=momentum_scan_lookback_days,
+            momentum_scan_minimum_candles=momentum_scan_minimum_candles,
             momentum_scan_request_interval_seconds=(
                 momentum_scan_request_interval_seconds
             ),
