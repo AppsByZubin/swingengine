@@ -1,0 +1,406 @@
+"""NSE-wide explainable fundamental screening for Slack CSV exports."""
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
+import json
+import logging
+from math import isfinite
+from pathlib import Path
+import re
+from tempfile import TemporaryDirectory
+from threading import Lock
+from time import monotonic, sleep
+from typing import Any, Protocol
+
+from fundamental.analyzer import ENDPOINT_FILES, FundamentalAnalyzer
+from upstox.assets import AssetCatalogError, AssetSearchResult
+from upstox.client import UpstoxAPIError
+from upstox.store import TokenState, TokenStateError
+
+LOGGER = logging.getLogger(__name__)
+
+DEFAULT_GOOD_THRESHOLD = 70.0
+DEFAULT_REQUEST_INTERVAL_SECONDS = 0.125
+DEFAULT_PROGRESS_INTERVAL = 100
+ISIN_PATTERN = re.compile(r"^[A-Z]{2}[A-Z0-9]{10}$")
+
+# Analyzer key, Upstox endpoint, and documented query parameters.
+FUNDAMENTAL_REQUESTS: tuple[
+    tuple[str, str, Mapping[str, str] | None], ...
+] = (
+    ("profile", "profile", None),
+    ("key_ratios", "key-ratios", None),
+    (
+        "balance_sheet",
+        "balance-sheet",
+        {"type": "consolidated", "fs": "true"},
+    ),
+    (
+        "income_statement",
+        "income-statement",
+        {
+            "type": "consolidated",
+            "time_period": "yearly",
+            "fs": "true",
+        },
+    ),
+    (
+        "cash_flow",
+        "cash-flow",
+        {"type": "consolidated", "fs": "true"},
+    ),
+    ("corporate_actions", "corporate-actions", None),
+    ("share_holdings", "share-holdings", None),
+    ("competitors", "competitors", None),
+)
+
+
+class FundamentalScanError(RuntimeError):
+    """Raised when the catalogue-wide fundamental scan cannot complete."""
+
+
+@dataclass(frozen=True, slots=True)
+class FundamentalStock:
+    """One NSE equity accepted by the supplied fundamental analyzer."""
+
+    asset_name: str
+    trading_symbol: str
+    isin: str
+    score: float
+    rating: str
+    confidence: float
+    sector: str
+    latest_financial_period: str
+
+
+@dataclass(frozen=True, slots=True)
+class FundamentalScanResult:
+    """Summary and export rows produced by an NSE fundamental scan."""
+
+    catalog_instruments: int
+    equity_assets: int
+    evaluated: int
+    failed: int
+    skipped: int
+    endpoint_failures: int
+    stocks: tuple[FundamentalStock, ...]
+    good_threshold: float = DEFAULT_GOOD_THRESHOLD
+
+
+class EquityCatalog(Protocol):
+    def refresh(self) -> int:
+        """Refresh the NSE instrument catalogue and return its row count."""
+
+    def list_equities(self) -> list[AssetSearchResult]:
+        """Return normal NSE equities from the refreshed catalogue."""
+
+
+class FundamentalClient(Protocol):
+    def get_fundamental_data(
+        self,
+        access_token: str,
+        isin: str,
+        endpoint: str,
+        params: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Return one company-fundamentals endpoint payload."""
+
+
+class AccessTokenStore(Protocol):
+    def load(self) -> TokenState:
+        """Load the current Upstox access token."""
+
+
+AnalyzePayloads = Callable[[Mapping[str, Any], float], dict[str, Any]]
+
+
+class NSEFundamentalScanner:
+    """Refresh NSE.json and score each distinct normal equity by ISIN."""
+
+    def __init__(
+        self,
+        catalog: EquityCatalog,
+        client: FundamentalClient,
+        token_store: AccessTokenStore,
+        *,
+        good_threshold: float = DEFAULT_GOOD_THRESHOLD,
+        request_interval_seconds: float = DEFAULT_REQUEST_INTERVAL_SECONDS,
+        progress_interval: int = DEFAULT_PROGRESS_INTERVAL,
+        sleep_function: Callable[[float], None] = sleep,
+        analyze_payloads: AnalyzePayloads | None = None,
+    ) -> None:
+        if not isfinite(good_threshold) or not 0 <= good_threshold <= 100:
+            raise ValueError("good_threshold must be between 0 and 100")
+        if (
+            not isfinite(request_interval_seconds)
+            or request_interval_seconds < 0
+        ):
+            raise ValueError(
+                "request_interval_seconds must be finite and non-negative"
+            )
+        if progress_interval <= 0:
+            raise ValueError("progress_interval must be positive")
+
+        self.catalog = catalog
+        self.client = client
+        self.token_store = token_store
+        self.good_threshold = good_threshold
+        self.request_interval_seconds = request_interval_seconds
+        self.progress_interval = progress_interval
+        self._sleep = sleep_function
+        self._analyze_payloads = analyze_payloads or analyze_fundamental_payloads
+        self._scan_lock = Lock()
+
+    def scan(self, *, now: datetime | None = None) -> FundamentalScanResult:
+        """Run one complete, non-overlapping NSE fundamental scan."""
+        if not self._scan_lock.acquire(blocking=False):
+            raise FundamentalScanError(
+                "An NSE fundamental scan is already running."
+            )
+
+        started_at = monotonic()
+        LOGGER.info(
+            "Starting NSE equity fundamental scan good_threshold=%.2f "
+            "request_interval_seconds=%.3f",
+            self.good_threshold,
+            self.request_interval_seconds,
+        )
+        try:
+            catalog_instruments, equities = self._refresh_equities()
+            access_token = self._valid_token(now or datetime.now(UTC))
+            result = self._evaluate(
+                catalog_instruments,
+                equities,
+                access_token,
+                started_at,
+            )
+            LOGGER.info(
+                "Completed NSE equity fundamental scan "
+                "catalog_instruments=%d equity_assets=%d evaluated=%d "
+                "good=%d skipped=%d failed=%d endpoint_failures=%d "
+                "elapsed_seconds=%.2f",
+                result.catalog_instruments,
+                result.equity_assets,
+                result.evaluated,
+                len(result.stocks),
+                result.skipped,
+                result.failed,
+                result.endpoint_failures,
+                monotonic() - started_at,
+            )
+            return result
+        except FundamentalScanError:
+            LOGGER.exception(
+                "NSE equity fundamental scan did not complete "
+                "elapsed_seconds=%.2f",
+                monotonic() - started_at,
+            )
+            raise
+        except Exception as error:
+            LOGGER.exception(
+                "Unexpected NSE equity fundamental scan failure "
+                "elapsed_seconds=%.2f",
+                monotonic() - started_at,
+            )
+            raise FundamentalScanError(
+                "Unable to complete the NSE equity fundamental scan."
+            ) from error
+        finally:
+            self._scan_lock.release()
+
+    def _refresh_equities(self) -> tuple[int, list[AssetSearchResult]]:
+        try:
+            catalog_instruments = self.catalog.refresh()
+            equities = self.catalog.list_equities()
+        except AssetCatalogError as error:
+            raise FundamentalScanError(str(error)) from error
+        if not equities:
+            raise FundamentalScanError(
+                "The refreshed catalogue contains no NSE equity instruments."
+            )
+        return catalog_instruments, equities
+
+    def _valid_token(self, current: datetime) -> str:
+        try:
+            token_state = self.token_store.load()
+        except TokenStateError as error:
+            raise FundamentalScanError(
+                "Upstox token state cannot be read."
+            ) from error
+        if not token_state.is_valid(current):
+            raise FundamentalScanError(
+                "A valid Upstox token is required. Use "
+                "`/swingengine auth set <token>`."
+            )
+        return token_state.access_token
+
+    def _evaluate(
+        self,
+        catalog_instruments: int,
+        equities: list[AssetSearchResult],
+        access_token: str,
+        started_at: float,
+    ) -> FundamentalScanResult:
+        stocks: list[FundamentalStock] = []
+        evaluated = 0
+        failed = 0
+        skipped = 0
+        endpoint_failures = 0
+        seen_isins: set[str] = set()
+        request_count = 0
+
+        for index, asset in enumerate(equities, start=1):
+            isin = _asset_isin(asset)
+            if isin is None or isin in seen_isins:
+                skipped += 1
+                LOGGER.warning(
+                    "Skipping NSE equity fundamental analysis index=%d/%d "
+                    "trading_symbol=%r instrument_key=%r isin=%r",
+                    index,
+                    len(equities),
+                    asset.trading_symbol,
+                    asset.instrument_key,
+                    asset.isin,
+                )
+                continue
+            seen_isins.add(isin)
+
+            payloads: dict[str, Any] = {}
+            for analyzer_key, endpoint, params in FUNDAMENTAL_REQUESTS:
+                if request_count:
+                    self._sleep(self.request_interval_seconds)
+                request_count += 1
+                try:
+                    payloads[analyzer_key] = self.client.get_fundamental_data(
+                        access_token,
+                        isin,
+                        endpoint,
+                        params,
+                    )
+                except UpstoxAPIError as error:
+                    if error.status_code in {401, 403}:
+                        raise FundamentalScanError(
+                            "Upstox rejected the access token during the "
+                            "fundamental scan. Set a valid token with "
+                            "`/swingengine auth set <token>`."
+                        ) from error
+                    endpoint_failures += 1
+                    LOGGER.warning(
+                        "Fundamentals endpoint failed index=%d/%d "
+                        "trading_symbol=%r isin=%r endpoint=%r error=%s",
+                        index,
+                        len(equities),
+                        asset.trading_symbol,
+                        isin,
+                        endpoint,
+                        error,
+                    )
+                    payloads[analyzer_key] = {
+                        "status": "error",
+                        "errors": [{"message": str(error)}],
+                    }
+
+            try:
+                analysis = self._analyze_payloads(
+                    payloads,
+                    self.good_threshold,
+                )
+                stock = _accepted_stock(asset, isin, analysis)
+            except Exception:
+                failed += 1
+                LOGGER.warning(
+                    "Unable to analyze NSE equity fundamentals index=%d/%d "
+                    "trading_symbol=%r isin=%r",
+                    index,
+                    len(equities),
+                    asset.trading_symbol,
+                    isin,
+                    exc_info=True,
+                )
+            else:
+                evaluated += 1
+                if stock is not None:
+                    stocks.append(stock)
+
+            if index % self.progress_interval == 0 or index == len(equities):
+                LOGGER.info(
+                    "NSE equity fundamental scan progress processed=%d/%d "
+                    "evaluated=%d good=%d skipped=%d failed=%d "
+                    "endpoint_failures=%d elapsed_seconds=%.2f",
+                    index,
+                    len(equities),
+                    evaluated,
+                    len(stocks),
+                    skipped,
+                    failed,
+                    endpoint_failures,
+                    monotonic() - started_at,
+                )
+
+        stocks.sort(
+            key=lambda stock: (
+                -stock.score,
+                stock.trading_symbol.casefold(),
+            )
+        )
+        return FundamentalScanResult(
+            catalog_instruments=catalog_instruments,
+            equity_assets=len(equities),
+            evaluated=evaluated,
+            failed=failed,
+            skipped=skipped,
+            endpoint_failures=endpoint_failures,
+            stocks=tuple(stocks),
+            good_threshold=self.good_threshold,
+        )
+
+
+def analyze_fundamental_payloads(
+    payloads: Mapping[str, Any],
+    good_threshold: float,
+) -> dict[str, Any]:
+    """Feed in-memory API payloads to the supplied file-oriented analyzer."""
+    with TemporaryDirectory(prefix="swingengine-fundamentals-") as folder:
+        directory = Path(folder)
+        for endpoint, filename in ENDPOINT_FILES.items():
+            if endpoint in payloads:
+                (directory / filename).write_text(
+                    json.dumps(payloads[endpoint], ensure_ascii=False),
+                    encoding="utf-8",
+                )
+        return FundamentalAnalyzer(directory, good_threshold).analyze()
+
+
+def _asset_isin(asset: AssetSearchResult) -> str | None:
+    candidates = (asset.isin, asset.instrument_key.partition("|")[2])
+    for candidate in candidates:
+        normalized = candidate.strip().upper()
+        if ISIN_PATTERN.fullmatch(normalized):
+            return normalized
+    return None
+
+
+def _accepted_stock(
+    asset: AssetSearchResult,
+    isin: str,
+    analysis: Mapping[str, Any],
+) -> FundamentalStock | None:
+    score = float(analysis["score"])
+    confidence = float(analysis["confidence"]["score"])
+    if not isfinite(score) or not isfinite(confidence):
+        raise ValueError("analyzer returned a non-finite score")
+    if analysis.get("decision") != "GOOD":
+        return None
+    return FundamentalStock(
+        asset_name=asset.name,
+        trading_symbol=asset.trading_symbol,
+        isin=isin,
+        score=score,
+        rating=str(analysis["rating"]),
+        confidence=confidence,
+        sector=str(analysis.get("sector") or "Unknown"),
+        latest_financial_period=str(
+            analysis.get("latest_financial_period") or ""
+        ),
+    )

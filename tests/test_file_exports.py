@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 from database.repository import AssetRecord, TrackerEntry
+from fundamental.scanner import FundamentalStock
 from slack.file_exports import (
     DEFAULT_FILES_DIRECTORY,
     CsvFileExporter,
@@ -140,6 +141,50 @@ def test_momentum_csv_contains_requested_fields(tmp_path) -> None:
     assert rows == [
         ["assetname", "trading_symbol", "ltp"],
         ["SUN PHARMACEUTICAL IND L", "SUNPHARMA", "1789.25"],
+    ]
+
+
+def test_fundamental_csv_contains_score_and_company_context(tmp_path) -> None:
+    upload = CsvFileExporter(tmp_path).export_fundamental(
+        [
+            FundamentalStock(
+                asset_name="SUN PHARMACEUTICAL IND L",
+                trading_symbol="SUNPHARMA",
+                isin="INE044A01036",
+                score=82.5,
+                rating="STRONG",
+                confidence=95.0,
+                sector="Pharmaceuticals",
+                latest_financial_period="Mar 2026",
+            )
+        ]
+    )
+
+    with upload.path.open(encoding="utf-8", newline="") as exported_file:
+        rows = list(csv.reader(exported_file))
+
+    assert upload.path == tmp_path / "fundamental-list.csv"
+    assert rows == [
+        [
+            "assetname",
+            "trading_symbol",
+            "isin",
+            "fundamental_score",
+            "rating",
+            "confidence",
+            "sector",
+            "latest_financial_period",
+        ],
+        [
+            "SUN PHARMACEUTICAL IND L",
+            "SUNPHARMA",
+            "INE044A01036",
+            "82.5",
+            "STRONG",
+            "95.0",
+            "Pharmaceuticals",
+            "Mar 2026",
+        ],
     ]
 
 

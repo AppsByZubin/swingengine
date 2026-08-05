@@ -54,6 +54,7 @@ except CSV exports, which it uploads to the conversation:
 /swingengine asset list file
 /swingengine asset upload
 /swingengine momentum list file
+/swingengine fundamental list file
 /swingengine tracker add SUNPHARMA
 /swingengine tracker delete SUNPHARMA
 /swingengine tracker list
@@ -132,9 +133,10 @@ directory. Source-checkout runs default to `files`, while the container uses
 the writable persistent path `/var/lib/swingengine/files`. Override either
 with `SWINGENGINE_FILES_DIR`. Uploaded asset CSVs are stored in `input`. CSV
 snapshots are written atomically to `output/asset-list.csv` and
-`output/tracker-list.csv` before being uploaded. Momentum scans use
-`output/momentum-list.csv`. Empty lists produce a CSV containing only their
-column headings. Tracker exports contain the asset name, trading symbol,
+`output/tracker-list.csv` before being uploaded. Momentum and fundamental
+scans use `output/momentum-list.csv` and `output/fundamental-list.csv`.
+Empty lists produce a CSV containing only their column headings. Tracker
+exports contain the asset name, trading symbol,
 momentum/trade/approval flags, allocated amount, and added date; internal
 tracker and asset IDs are omitted.
 
@@ -183,6 +185,40 @@ their symbol, instrument key, and exception traceback at WARNING level.
 Transient Upstox market-data connection failures and HTTP 408, 425, 429, and
 5xx responses are attempted up to three times. Transport failures back off for
 one and then two seconds; HTTP 429 uses `Retry-After` when Upstox supplies it.
+
+## NSE-wide fundamental CSV
+
+Run the explainable fundamental analyzer across every normal equity in the
+refreshed Upstox NSE instrument catalogue:
+
+```text
+/swingengine fundamental list file
+```
+
+For each distinct ISIN, SwingEngine retrieves the Upstox company profile, key
+ratios, balance sheet, income statement, cash flow, corporate actions,
+shareholding pattern, and competitor profile. Consolidated yearly statements
+include their full line-item breakdown. The scoring model is adapted from
+`/home/amit/python/src/github.com/demo/playground/funda/analyze_fundamentals.py`
+and evaluates valuation, profitability, growth, financial health, cash-flow
+quality, and shareholder returns. Companies with the analyzer's `GOOD`
+decision (a score of at least 70 by default) are uploaded in descending score
+order as `output/fundamental-list.csv` with these columns:
+
+```csv
+assetname,trading_symbol,isin,fundamental_score,rating,confidence,sector,latest_financial_period
+```
+
+The command is read-only with respect to the database and requires a valid
+stored Upstox token. It spaces endpoint calls by 0.125 seconds and uses the
+client's existing retry handling for transport errors, HTTP 429, and 5xx
+responses. An unavailable non-authentication endpoint reduces data confidence
+but does not automatically reject a company; HTTP 401 or 403 stops the scan so
+an expired or unauthorized token is not retried across the full catalogue.
+The CSV upload comment reports skipped instruments, companies that could not
+be scored, and individual endpoint failures. This is a screening aid, not
+personalized investment advice, and price momentum is outside the supplied
+fundamental analyzer.
 
 The Slack administrator configured by `SLACK_ALERT_USER_ID` can update tracker
 approval and allocation values by exporting, editing, and uploading the tracker

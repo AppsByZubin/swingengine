@@ -184,6 +184,7 @@ def test_search_matches_instrument_key_and_isin(tmp_path: Path) -> None:
     catalog = AssetCatalog(settings(catalog_file))
 
     assert catalog.search("ine123456789")[0].trading_symbol == "EXAMPLE"
+    assert catalog.search("ine123456789")[0].isin == "INE123456789"
 
 
 def test_search_requires_a_refreshed_catalog(tmp_path: Path) -> None:

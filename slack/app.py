@@ -10,6 +10,7 @@ from slack_sdk.errors import SlackApiError, SlackClientError
 
 from database.config import DatabaseSettings
 from database.repository import AssetTrackerRepository
+from fundamental.scanner import NSEFundamentalScanner
 from slack.commands import (
     ASSET_IMPORT_MODAL_KEY,
     FILE_UPLOAD_KEY,
@@ -81,6 +82,14 @@ def handle_slash_command(
                 ":hourglass_flowing_sand: NSE momentum scan started. "
                 "A full rate-limited scan can take tens of minutes; the "
                 "CSV will be uploaded to this conversation when ready."
+            )
+        )
+    if _is_fundamental_list_file(command_text):
+        respond(
+            ephemeral(
+                ":hourglass_flowing_sand: NSE fundamental scan started. "
+                "The rate-limited full-market analysis can take tens of "
+                "minutes; the CSV will be uploaded here when ready."
             )
         )
     if (
@@ -521,6 +530,16 @@ def _is_momentum_list_file(text: str) -> bool:
     )
 
 
+def _is_fundamental_list_file(text: str) -> bool:
+    parts = text.split()
+    return (
+        len(parts) == 3
+        and parts[0].casefold() == "fundamental"
+        and parts[1].casefold() == "list"
+        and parts[2].casefold() == "file"
+    )
+
+
 def create_app(
     settings: Settings,
     router: CommandRouter | None = None,
@@ -621,6 +640,11 @@ def run() -> None:
         auth_client,
         token_store,
     )
+    fundamental_scanner = NSEFundamentalScanner(
+        asset_catalog,
+        auth_client,
+        token_store,
+    )
     asset_importer = CsvAssetImporter(
         file_directories.input,
         asset_catalog,
@@ -641,6 +665,7 @@ def run() -> None:
             file_exporter=file_exporter,
             evaluation_service=tracker_evaluator,
             momentum_service=momentum_scanner,
+            fundamental_service=fundamental_scanner,
         ),
         asset_importer,
         tracker_importer,

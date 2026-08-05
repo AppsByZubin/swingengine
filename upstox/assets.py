@@ -107,6 +107,7 @@ class AssetSearchResult:
     segment: str
     instrument_type: str
     instrument_key: str
+    isin: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,6 +345,7 @@ def _catalog_asset(asset: Mapping[str, Any]) -> _CatalogAsset:
         segment=str(asset.get("segment", "")).strip(),
         instrument_type=str(asset.get("instrument_type", "")).strip(),
         instrument_key=str(asset.get("instrument_key", "")).strip(),
+        isin=str(asset.get("isin", "")).strip(),
     )
     return _CatalogAsset(
         result=result,

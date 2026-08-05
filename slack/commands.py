@@ -14,6 +14,10 @@ from database.repository import (
     TrackerEntry,
     TrackerNotFoundError,
 )
+from fundamental.scanner import (
+    FundamentalScanError,
+    FundamentalScanResult,
+)
 from slack.file_exports import (
     CsvFileExporter,
     FileExportError,
@@ -86,6 +90,11 @@ class MomentumScanService(Protocol):
         """Screen every NSE equity and return momentum export rows."""
 
 
+class FundamentalScanService(Protocol):
+    def scan(self) -> FundamentalScanResult:
+        """Screen every NSE equity and return fundamental export rows."""
+
+
 def ephemeral(text: str) -> SlackResponse:
     """Build a response visible only to the user who ran the command."""
     return {"response_type": "ephemeral", "text": text}
@@ -142,6 +151,9 @@ def help_command(_: str = "") -> SlackResponse:
         "*Momentum*\n"
         "• `/swingengine momentum list file` — refresh NSE instruments, "
         "screen all equities, and upload qualifying stocks as CSV\n\n"
+        "*Fundamentals*\n"
+        "• `/swingengine fundamental list file` — refresh NSE instruments, "
+        "fundamentally score all equities, and upload decent stocks as CSV\n\n"
         "*Tracker*\n"
         "• `/swingengine tracker add <trading_symbol>` — start tracking a "
         "saved asset\n"
@@ -520,6 +532,47 @@ def momentum_command(
     )
 
 
+def fundamental_command(
+    arguments: str = "",
+    fundamental_service: FundamentalScanService | None = None,
+    file_exporter: CsvFileExporter | None = None,
+) -> SlackResponse:
+    if arguments.strip().casefold() != "list file":
+        return ephemeral("Use `/swingengine fundamental list file`.")
+    if fundamental_service is None:
+        return ephemeral("NSE fundamental evaluation is not configured.")
+    if file_exporter is None:
+        return ephemeral("CSV file export is not configured.")
+
+    try:
+        result = fundamental_service.scan()
+    except FundamentalScanError as error:
+        return ephemeral(f":warning: {error}")
+    try:
+        upload = file_exporter.export_fundamental(result.stocks)
+    except FileExportError as error:
+        return ephemeral(f":warning: {error}")
+
+    has_warnings = bool(
+        result.failed or result.skipped or result.endpoint_failures
+    )
+    prefix = ":warning:" if has_warnings else ":white_check_mark:"
+    summary = (
+        f"{prefix} NSE fundamental scan completed for "
+        f"{result.evaluated:,} of {result.equity_assets:,} equity "
+        f"asset(s). Decent (score >= {result.good_threshold:g}): "
+        f"{len(result.stocks):,}; skipped: {result.skipped:,}; "
+        f"failed: {result.failed:,}; endpoint failures: "
+        f"{result.endpoint_failures:,}. CSV uploaded."
+    )
+    upload = SlackFileUpload(
+        path=upload.path,
+        title=upload.title,
+        initial_comment=summary,
+    )
+    return file_upload_response(summary, upload)
+
+
 def _format_asset(asset: AssetSearchResult) -> str:
     symbol = asset.trading_symbol or "(no trading symbol)"
     name = asset.name
@@ -618,6 +671,7 @@ def build_router(
     file_exporter: CsvFileExporter | None = None,
     evaluation_service: TrackerEvaluationService | None = None,
     momentum_service: MomentumScanService | None = None,
+    fundamental_service: FundamentalScanService | None = None,
 ) -> CommandRouter:
     router = CommandRouter()
     router.register("help", help_command)
@@ -648,6 +702,14 @@ def build_router(
         lambda arguments: momentum_command(
             arguments,
             momentum_service,
+            file_exporter,
+        ),
+    )
+    router.register(
+        "fundamental",
+        lambda arguments: fundamental_command(
+            arguments,
+            fundamental_service,
             file_exporter,
         ),
     )

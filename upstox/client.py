@@ -20,6 +20,18 @@ AUTHORIZED_GET_MAX_ATTEMPTS = 3
 AUTHORIZED_GET_BACKOFF_SECONDS = 1.0
 MAX_RETRY_AFTER_SECONDS = 60.0
 RETRIABLE_HTTP_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
+FUNDAMENTAL_ENDPOINTS = frozenset(
+    {
+        "profile",
+        "key-ratios",
+        "balance-sheet",
+        "income-statement",
+        "cash-flow",
+        "corporate-actions",
+        "share-holdings",
+        "competitors",
+    }
+)
 
 
 class UpstoxAPIError(RuntimeError):
@@ -243,6 +255,33 @@ class UpstoxAuthClient:
             params={"instrument_key": ",".join(keys), "interval": "1d"},
         )
         return self._daily_market_quotes(payload)
+
+    def get_fundamental_data(
+        self,
+        access_token: str,
+        isin: str,
+        endpoint: str,
+        params: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Return one documented Upstox company-fundamentals payload."""
+        normalized_isin = isin.strip().upper()
+        normalized_endpoint = endpoint.strip().casefold()
+        if not normalized_isin:
+            raise ValueError("isin cannot be empty")
+        if normalized_endpoint not in FUNDAMENTAL_ENDPOINTS:
+            raise ValueError("unsupported fundamentals endpoint")
+
+        encoded_isin = quote(normalized_isin, safe="")
+        url = (
+            f"{self.settings.api_base_url}/v2/fundamentals/"
+            f"{encoded_isin}/{normalized_endpoint}"
+        )
+        return self._authorized_get(
+            url,
+            access_token,
+            f"fundamentals {normalized_endpoint}",
+            params=params,
+        )
 
     def _authorized_get(
         self,

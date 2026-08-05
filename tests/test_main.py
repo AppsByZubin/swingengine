@@ -16,5 +16,5 @@ def test_container_includes_all_imported_application_packages() -> None:
         encoding="utf-8"
     )
 
-    for package in ("database", "slack", "tracker", "upstox"):
+    for package in ("database", "fundamental", "slack", "tracker", "upstox"):
         assert f"COPY {package} ./{package}" in dockerfile

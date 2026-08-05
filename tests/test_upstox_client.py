@@ -219,6 +219,47 @@ def test_daily_market_quotes_reject_more_than_500_keys() -> None:
         )
 
 
+def test_fundamental_data_uses_documented_endpoint_and_parameters() -> None:
+    session = RecordingSession()
+    session.get_response = FakeResponse(
+        200,
+        {"status": "success", "data": {"type": "consolidated"}},
+    )
+    client = UpstoxAuthClient(
+        settings(), session  # type: ignore[arg-type]
+    )
+
+    payload = client.get_fundamental_data(
+        "approved-token",
+        " ine002a01018 ",
+        "balance-sheet",
+        {"type": "consolidated", "fs": "true"},
+    )
+
+    assert payload["status"] == "success"
+    url, request = session.get_calls[0]
+    assert url.endswith(
+        "/v2/fundamentals/INE002A01018/balance-sheet"
+    )
+    assert request["params"] == {"type": "consolidated", "fs": "true"}
+    headers = request["headers"]
+    assert isinstance(headers, dict)
+    assert headers["Authorization"] == "Bearer approved-token"
+
+
+def test_fundamental_data_rejects_unknown_endpoint() -> None:
+    client = UpstoxAuthClient(
+        settings(), RecordingSession()  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ValueError, match="unsupported fundamentals endpoint"):
+        client.get_fundamental_data(
+            "approved-token",
+            "INE002A01018",
+            "../../user/profile",
+        )
+
+
 def test_market_data_get_retries_a_disconnected_connection(
     caplog: Any,
 ) -> None:
