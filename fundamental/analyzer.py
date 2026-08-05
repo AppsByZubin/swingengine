@@ -28,7 +28,7 @@ import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 
 ENDPOINT_FILES = {
@@ -244,23 +244,61 @@ def fmt_number(value: Any, decimals: int = 2) -> str:
 
 
 class FundamentalAnalyzer:
-    """Analyze a directory containing Upstox fundamentals endpoint responses."""
+    """Analyze file-backed or in-memory Upstox fundamentals responses."""
 
-    def __init__(self, folder: Path | str, good_threshold: float = 70.0) -> None:
-        self.folder = Path(folder)
+    def __init__(
+        self,
+        folder: Path | str | None,
+        good_threshold: float = 70.0,
+        *,
+        source_payloads: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.folder = Path(folder) if folder is not None else None
         self.good_threshold = good_threshold
+        self.source_payloads = (
+            None if source_payloads is None else dict(source_payloads)
+        )
         self.payloads: dict[str, Any] = {}
         self.endpoint_status: dict[str, str] = {}
         self.issues: list[DataIssue] = []
 
-    def _load(self) -> None:
-        if not self.folder.is_dir():
-            raise ValueError(f"Fundamentals folder does not exist: {self.folder}")
+    @classmethod
+    def from_payloads(
+        cls,
+        payloads: Mapping[str, Any],
+        good_threshold: float = 70.0,
+    ) -> "FundamentalAnalyzer":
+        """Build an analyzer that needs no temporary JSON files."""
+        return cls(
+            None,
+            good_threshold,
+            source_payloads=payloads,
+        )
 
+    def _load(self) -> None:
         # Make repeated calls to analyze() deterministic for library users.
         self.payloads.clear()
         self.endpoint_status.clear()
         self.issues.clear()
+
+        if self.source_payloads is not None:
+            for endpoint, filename in ENDPOINT_FILES.items():
+                if endpoint not in self.source_payloads:
+                    self.endpoint_status[endpoint] = "missing"
+                    self.issues.append(
+                        DataIssue(endpoint, f"Missing payload: {filename}")
+                    )
+                    continue
+                self._record_payload(
+                    endpoint,
+                    self.source_payloads[endpoint],
+                )
+            return
+
+        if self.folder is None or not self.folder.is_dir():
+            raise ValueError(
+                f"Fundamentals folder does not exist: {self.folder}"
+            )
 
         for endpoint, filename in ENDPOINT_FILES.items():
             path = self.folder / filename
@@ -275,26 +313,37 @@ class FundamentalAnalyzer:
                 self.issues.append(DataIssue(endpoint, f"Could not read valid JSON: {exc}"))
                 continue
 
-            self.payloads[endpoint] = payload
-            if not isinstance(payload, dict):
-                self.endpoint_status[endpoint] = "invalid"
-                self.issues.append(DataIssue(endpoint, "Endpoint response is not a JSON object"))
-                continue
+            self._record_payload(endpoint, payload)
 
-            status = str(payload.get("status", "unknown")).lower()
-            if status == "success" and "data" in payload:
-                self.endpoint_status[endpoint] = "success"
-                continue
+    def _record_payload(self, endpoint: str, payload: Any) -> None:
+        self.payloads[endpoint] = payload
+        if not isinstance(payload, dict):
+            self.endpoint_status[endpoint] = "invalid"
+            self.issues.append(
+                DataIssue(endpoint, "Endpoint response is not a JSON object")
+            )
+            return
 
-            self.endpoint_status[endpoint] = "error"
-            errors = payload.get("errors")
-            if isinstance(errors, list) and errors and isinstance(errors[0], dict):
-                error = errors[0]
-                code = error.get("errorCode") or error.get("error_code")
-                message = error.get("message") or f"API status was {status}"
-                self.issues.append(DataIssue(endpoint, str(message), str(code) if code else None))
-            else:
-                self.issues.append(DataIssue(endpoint, f"API status was {status}"))
+        status = str(payload.get("status", "unknown")).lower()
+        if status == "success" and "data" in payload:
+            self.endpoint_status[endpoint] = "success"
+            return
+
+        self.endpoint_status[endpoint] = "error"
+        errors = payload.get("errors")
+        if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+            error = errors[0]
+            code = error.get("errorCode") or error.get("error_code")
+            message = error.get("message") or f"API status was {status}"
+            self.issues.append(
+                DataIssue(
+                    endpoint,
+                    str(message),
+                    str(code) if code else None,
+                )
+            )
+        else:
+            self.issues.append(DataIssue(endpoint, f"API status was {status}"))
 
     def data(self, endpoint: str) -> Any:
         payload = self.payloads.get(endpoint)

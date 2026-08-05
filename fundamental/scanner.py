@@ -3,17 +3,14 @@
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-import json
 import logging
 from math import isfinite
-from pathlib import Path
 import re
-from tempfile import TemporaryDirectory
 from threading import Lock
 from time import monotonic, sleep
 from typing import Any, Protocol
 
-from fundamental.analyzer import ENDPOINT_FILES, FundamentalAnalyzer
+from fundamental.analyzer import FundamentalAnalyzer
 from upstox.assets import AssetCatalogError, AssetSearchResult
 from upstox.client import UpstoxAPIError
 from upstox.store import TokenState, TokenStateError
@@ -360,16 +357,11 @@ def analyze_fundamental_payloads(
     payloads: Mapping[str, Any],
     good_threshold: float,
 ) -> dict[str, Any]:
-    """Feed in-memory API payloads to the supplied file-oriented analyzer."""
-    with TemporaryDirectory(prefix="swingengine-fundamentals-") as folder:
-        directory = Path(folder)
-        for endpoint, filename in ENDPOINT_FILES.items():
-            if endpoint in payloads:
-                (directory / filename).write_text(
-                    json.dumps(payloads[endpoint], ensure_ascii=False),
-                    encoding="utf-8",
-                )
-        return FundamentalAnalyzer(directory, good_threshold).analyze()
+    """Analyze API payloads without relying on a system temp directory."""
+    return FundamentalAnalyzer.from_payloads(
+        payloads,
+        good_threshold,
+    ).analyze()
 
 
 def _asset_isin(asset: AssetSearchResult) -> str | None:

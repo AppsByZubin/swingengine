@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -194,7 +195,13 @@ def test_valid_stored_token_is_required() -> None:
         scanner.scan(now=datetime(2026, 8, 5, tzinfo=UTC))
 
 
-def test_payload_adapter_runs_the_supplied_analyzer() -> None:
+def test_payload_adapter_runs_without_writing_temporary_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_file_write(*args: object, **kwargs: object) -> int:
+        raise AssertionError("in-memory analysis must not write files")
+
+    monkeypatch.setattr(Path, "write_text", reject_file_write)
     payloads = {
         "profile": {
             "status": "success",
