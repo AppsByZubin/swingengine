@@ -42,6 +42,20 @@ ENDPOINT_FILES = {
     "competitors": "competitor.json",
 }
 
+MANDATORY_ENDPOINTS = (
+    "profile",
+    "balance_sheet",
+    "cash_flow",
+    "income_statement",
+    "key_ratios",
+)
+
+OPTIONAL_ENDPOINTS = (
+    "competitors",
+    "corporate_actions",
+    "share_holdings",
+)
+
 # Confidence weights reflect how important an endpoint is to this analysis.
 ENDPOINT_CONFIDENCE_WEIGHTS = {
     "profile": 0.05,
@@ -243,6 +257,15 @@ def fmt_number(value: Any, decimals: int = 2) -> str:
     return f"{value:.{decimals}f}"
 
 
+def _data_available(data: Any) -> bool:
+    """Return whether an endpoint supplied non-empty analysis data."""
+    if data is None:
+        return False
+    if isinstance(data, (dict, list, tuple, set, str, bytes)):
+        return bool(data)
+    return True
+
+
 class FundamentalAnalyzer:
     """Analyze file-backed or in-memory Upstox fundamentals responses."""
 
@@ -326,7 +349,13 @@ class FundamentalAnalyzer:
 
         status = str(payload.get("status", "unknown")).lower()
         if status == "success" and "data" in payload:
-            self.endpoint_status[endpoint] = "success"
+            if _data_available(payload["data"]):
+                self.endpoint_status[endpoint] = "success"
+            else:
+                self.endpoint_status[endpoint] = "unavailable"
+                self.issues.append(
+                    DataIssue(endpoint, "Endpoint returned no data")
+                )
             return
 
         self.endpoint_status[endpoint] = "error"
@@ -916,6 +945,17 @@ class FundamentalAnalyzer:
 
     def analyze(self) -> dict[str, Any]:
         self._load()
+        unavailable = [
+            endpoint
+            for endpoint in MANDATORY_ENDPOINTS
+            if self.endpoint_status.get(endpoint) != "success"
+        ]
+        if unavailable:
+            raise ValueError(
+                "Cannot perform fundamental analysis; mandatory data is "
+                f"unavailable: {', '.join(unavailable)}"
+            )
+
         ratios = self.ratio_map()
         categories = [
             self.analyze_valuation(ratios),

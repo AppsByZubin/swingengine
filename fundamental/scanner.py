@@ -10,7 +10,7 @@ from threading import Lock
 from time import monotonic, sleep
 from typing import Any, Protocol
 
-from fundamental.analyzer import FundamentalAnalyzer
+from fundamental.analyzer import FundamentalAnalyzer, MANDATORY_ENDPOINTS
 from upstox.assets import AssetCatalogError, AssetSearchResult
 from upstox.client import UpstoxAPIError
 from upstox.store import TokenState, TokenStateError
@@ -298,6 +298,21 @@ class NSEFundamentalScanner:
                         "errors": [{"message": str(error)}],
                     }
 
+            unavailable = _unavailable_mandatory_payloads(payloads)
+            if unavailable:
+                skipped += 1
+                LOGGER.warning(
+                    "Skipping NSE equity fundamental analysis because "
+                    "mandatory data is unavailable index=%d/%d "
+                    "trading_symbol=%r isin=%r endpoints=%s",
+                    index,
+                    len(equities),
+                    asset.trading_symbol,
+                    isin,
+                    ",".join(unavailable),
+                )
+                continue
+
             try:
                 analysis = self._analyze_payloads(
                     payloads,
@@ -362,6 +377,27 @@ def analyze_fundamental_payloads(
         payloads,
         good_threshold,
     ).analyze()
+
+
+def _unavailable_mandatory_payloads(
+    payloads: Mapping[str, Any],
+) -> list[str]:
+    return [
+        endpoint
+        for endpoint in MANDATORY_ENDPOINTS
+        if not _payload_data_available(payloads.get(endpoint))
+    ]
+
+
+def _payload_data_available(payload: Any) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+    if str(payload.get("status", "")).casefold() != "success":
+        return False
+    data = payload.get("data")
+    if isinstance(data, (Mapping, list, tuple, set, str, bytes)):
+        return bool(data)
+    return data is not None
 
 
 def _asset_isin(asset: AssetSearchResult) -> str | None:

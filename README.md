@@ -203,7 +203,11 @@ include their full line-item breakdown. The scoring model is adapted from
 and evaluates valuation, profitability, growth, financial health, cash-flow
 quality, and shareholder returns. Companies with the analyzer's `GOOD`
 decision (a score of at least 70 by default) are uploaded in descending score
-order as `output/fundamental-list.csv` with these columns:
+order as `output/fundamental-list.csv` with these columns. Profile, key ratios,
+balance sheet, income statement, and cash flow are mandatory; if any one is
+missing, invalid, unsuccessful, or empty, analysis for that company is skipped.
+Competitor, corporate-action, and shareholding data are optional and do not
+block analysis:
 
 ```csv
 assetname,trading_symbol,isin,fundamental_score,rating,confidence,sector,latest_financial_period
@@ -212,9 +216,9 @@ assetname,trading_symbol,isin,fundamental_score,rating,confidence,sector,latest_
 The command is read-only with respect to the database and requires a valid
 stored Upstox token. It spaces endpoint calls by 0.125 seconds and uses the
 client's existing retry handling for transport errors, HTTP 429, and 5xx
-responses. An unavailable non-authentication endpoint reduces data confidence
-but does not automatically reject a company; HTTP 401 or 403 stops the scan so
-an expired or unauthorized token is not retried across the full catalogue.
+responses. An unavailable optional endpoint reduces data confidence but does
+not automatically reject a company; HTTP 401 or 403 stops the scan so an
+expired or unauthorized token is not retried across the full catalogue.
 The CSV upload comment reports skipped instruments, companies that could not
 be scored, and individual endpoint failures. This is a screening aid, not
 personalized investment advice, and price momentum is outside the supplied

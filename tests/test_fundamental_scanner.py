@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from fundamental.analyzer import MANDATORY_ENDPOINTS
 from fundamental.scanner import (
     FUNDAMENTAL_REQUESTS,
     FundamentalScanError,
@@ -68,7 +69,11 @@ class Client:
         self.calls.append((isin, endpoint, params))
         if endpoint == self.fail_endpoint:
             raise UpstoxAPIError("endpoint failed", self.failure_status)
-        return {"status": "success", "data": {}, "isin": isin}
+        return {
+            "status": "success",
+            "data": {"available": True},
+            "isin": isin,
+        }
 
 
 def fake_analysis(
@@ -124,7 +129,7 @@ def test_scanner_refreshes_and_exports_only_good_companies() -> None:
     assert sleep_calls == [0.125] * 15
 
 
-def test_non_auth_endpoint_failure_reduces_confidence_but_continues() -> None:
+def test_optional_endpoint_failure_reduces_confidence_but_continues() -> None:
     client = Client()
     client.fail_endpoint = "competitors"
     scanner = NSEFundamentalScanner(
@@ -140,6 +145,43 @@ def test_non_auth_endpoint_failure_reduces_confidence_but_continues() -> None:
     assert result.evaluated == 1
     assert result.endpoint_failures == 1
     assert len(result.stocks) == 1
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "profile",
+        "balance-sheet",
+        "cash-flow",
+        "income-statement",
+        "key-ratios",
+    ],
+)
+def test_mandatory_endpoint_failure_skips_analysis(endpoint: str) -> None:
+    client = Client()
+    client.fail_endpoint = endpoint
+
+    def reject_analysis(
+        payloads: dict[str, Any],
+        threshold: float,
+    ) -> dict[str, Any]:
+        raise AssertionError("analysis must be skipped")
+
+    scanner = NSEFundamentalScanner(
+        Catalog([asset("SUNPHARMA", "INE044A01036")]),
+        client,
+        Store(),
+        request_interval_seconds=0,
+        analyze_payloads=reject_analysis,  # type: ignore[arg-type]
+    )
+
+    result = scanner.scan(now=datetime(2026, 8, 5, tzinfo=UTC))
+
+    assert result.evaluated == 0
+    assert result.failed == 0
+    assert result.skipped == 1
+    assert result.endpoint_failures == 1
+    assert result.stocks == ()
 
 
 def test_auth_endpoint_failure_stops_the_scan() -> None:
@@ -221,6 +263,18 @@ def test_payload_adapter_runs_without_writing_temporary_files(
                 {"name": "ROCE", "company_value": "25%", "sector_value": "18%"},
             ],
         },
+        "balance_sheet": {
+            "status": "success",
+            "data": {"available": True},
+        },
+        "income_statement": {
+            "status": "success",
+            "data": {"available": True},
+        },
+        "cash_flow": {
+            "status": "success",
+            "data": {"available": True},
+        },
     }
 
     result = analyze_fundamental_payloads(payloads, 70.0)
@@ -228,3 +282,32 @@ def test_payload_adapter_runs_without_writing_temporary_files(
     assert result["company"] == "Example Limited"
     assert result["score"] >= 70
     assert result["decision"] == "GOOD"
+
+
+@pytest.mark.parametrize("endpoint", MANDATORY_ENDPOINTS)
+def test_payload_adapter_rejects_missing_mandatory_data(endpoint: str) -> None:
+    payloads = {
+        mandatory: {
+            "status": "success",
+            "data": {"available": True},
+        }
+        for mandatory in MANDATORY_ENDPOINTS
+    }
+    del payloads[endpoint]
+
+    with pytest.raises(ValueError, match=endpoint):
+        analyze_fundamental_payloads(payloads, 70.0)
+
+
+def test_payload_adapter_rejects_empty_mandatory_data() -> None:
+    payloads = {
+        endpoint: {
+            "status": "success",
+            "data": {"available": True},
+        }
+        for endpoint in MANDATORY_ENDPOINTS
+    }
+    payloads["cash_flow"]["data"] = {}
+
+    with pytest.raises(ValueError, match="cash_flow"):
+        analyze_fundamental_payloads(payloads, 70.0)
