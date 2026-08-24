@@ -5,7 +5,8 @@ The analyzer reads the JSON endpoint responses in a directory such as ``funda/``
 and evaluates six pillars:
 
 * valuation versus the reported sector
-* profitability and capital efficiency
+* profitability and capital efficiency (highest-weighted pillar; includes EPS,
+  with EPS > 18 treated as a high-priority earnings-quality bar)
 * multi-year growth
 * balance-sheet and liquidity health
 * cash-flow quality
@@ -249,6 +250,18 @@ def profitability_score(name: str, company: float, sector: Optional[float]) -> f
     return 0.60 * absolute + 0.40 * relative
 
 
+# High-priority earnings-quality bar: crossing it is scored as a step into
+# "good" territory (70+) rather than a smooth continuation of the curve below it.
+EPS_HIGH_PRIORITY_THRESHOLD = 18.0
+
+
+def eps_score(value: float) -> float:
+    return interpolate_score(
+        value,
+        [(0, 0), (5, 15), (10, 35), (15, 55), (18, 70), (22, 82), (30, 92), (45, 100)],
+    )
+
+
 def fmt_number(value: Any, decimals: int = 2) -> str:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return str(value)
@@ -453,9 +466,9 @@ class FundamentalAnalyzer:
     def analyze_profitability(
         self, ratios: dict[str, tuple[Optional[float], Optional[float]]]
     ) -> CategoryScore:
-        category = CategoryScore("Profitability", None, 20.0)
+        category = CategoryScore("Profitability", None, 30.0)
         components: list[tuple[Optional[float], float]] = []
-        weights = {"ROE": 0.40, "ROCE": 0.40, "ROA": 0.20}
+        weights = {"ROE": 0.35, "ROCE": 0.30, "ROA": 0.15}
 
         for name, weight in weights.items():
             company, sector = ratios.get(name, (None, None))
@@ -476,6 +489,23 @@ class FundamentalAnalyzer:
                         f"{name} of {company:.2f}% meets or exceeds the sector's {sector:.2f}%."
                     )
             components.append((profitability_score(name, company, sector), weight))
+
+        eps, _eps_sector = ratios.get("EPS", (None, None))
+        eps_weight = 0.20
+        if eps is None:
+            category.caveats.append("EPS is unavailable.")
+            components.append((None, eps_weight))
+        else:
+            category.metrics["EPS"] = round(eps, 2)
+            components.append((eps_score(eps), eps_weight))
+            if eps > EPS_HIGH_PRIORITY_THRESHOLD:
+                category.strengths.append(
+                    f"EPS of {eps:.2f} clears the {EPS_HIGH_PRIORITY_THRESHOLD:.0f} high-priority bar."
+                )
+            else:
+                category.risks.append(
+                    f"EPS of {eps:.2f} is below the {EPS_HIGH_PRIORITY_THRESHOLD:.0f} high-priority bar."
+                )
 
         revenue = self.category_series("income_statement", "income_statement", "revenue")
         operating_profit = self.category_series(
@@ -505,7 +535,7 @@ class FundamentalAnalyzer:
         return category
 
     def analyze_growth(self) -> CategoryScore:
-        category = CategoryScore("Growth", None, 20.0)
+        category = CategoryScore("Growth", None, 15.0)
         revenue = self.category_series("income_statement", "income_statement", "revenue")
         operating_profit = self.category_series(
             "income_statement", "income_statement", "operating_profit"
@@ -680,7 +710,7 @@ class FundamentalAnalyzer:
         return category
 
     def analyze_cash_flow(self) -> CategoryScore:
-        category = CategoryScore("Cash-flow quality", None, 20.0)
+        category = CategoryScore("Cash-flow quality", None, 15.0)
         operating = self.category_series("cash_flow", "cash_flow", "operating")
         investing = self.category_series("cash_flow", "cash_flow", "investing")
         net_profit = self.category_series("income_statement", "income_statement", "net_profit")
