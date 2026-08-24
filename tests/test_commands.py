@@ -166,6 +166,7 @@ class FakeFundamentalService:
             failed=0,
             skipped=0,
             endpoint_failures=0,
+            good_threshold=70.0,
             stocks=(
                 FundamentalStock(
                     asset_name="SUN PHARMACEUTICAL IND L",

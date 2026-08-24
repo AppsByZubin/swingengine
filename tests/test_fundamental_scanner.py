@@ -125,6 +125,7 @@ def test_scanner_refreshes_and_exports_only_good_companies() -> None:
         catalog,
         client,
         Store(),
+        good_threshold=70.0,
         sleep_function=sleep_calls.append,
         analyze_payloads=fake_analysis,  # type: ignore[arg-type]
         progress_interval=1,

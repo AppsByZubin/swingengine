@@ -17,7 +17,7 @@ from upstox.store import TokenState, TokenStateError
 
 LOGGER = logging.getLogger(__name__)
 
-DEFAULT_GOOD_THRESHOLD = 70.0
+DEFAULT_GOOD_THRESHOLD = 50.0
 DEFAULT_REQUEST_INTERVAL_SECONDS = 0.125
 DEFAULT_PROGRESS_INTERVAL = 100
 ISIN_PATTERN = re.compile(r"^[A-Z]{2}[A-Z0-9]{10}$")

@@ -44,6 +44,7 @@ class AssetRecord:
     asset_name: str
     trading_symbol: str
     instrument_key: str | None
+    has_fno: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +100,8 @@ class AssetTrackerRepository:
                         asset_id,
                         asset_name,
                         trading_symbol,
-                        instrument_key
+                        instrument_key,
+                        has_fno
                     """,
                     (
                         asset.name,
@@ -135,7 +137,8 @@ class AssetTrackerRepository:
                         asset_id,
                         asset_name,
                         trading_symbol,
-                        instrument_key
+                        instrument_key,
+                        has_fno
                     """,
                     (trading_symbol,),
                 ).fetchone()
@@ -161,7 +164,8 @@ class AssetTrackerRepository:
                         asset_id,
                         asset_name,
                         trading_symbol,
-                        instrument_key
+                        instrument_key,
+                        has_fno
                     FROM public.assets
                     ORDER BY trading_symbol, asset_id
                     """
@@ -452,6 +456,7 @@ def _asset_record(row: tuple[Any, ...]) -> AssetRecord:
         asset_name=str(row[1]),
         trading_symbol=str(row[2]),
         instrument_key=None if row[3] is None else str(row[3]),
+        has_fno=bool(row[4]),
     )
 
 

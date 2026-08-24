@@ -285,7 +285,7 @@ class FundamentalAnalyzer:
     def __init__(
         self,
         folder: Path | str | None,
-        good_threshold: float = 70.0,
+        good_threshold: float = 50.0,
         *,
         source_payloads: Mapping[str, Any] | None = None,
     ) -> None:
@@ -302,7 +302,7 @@ class FundamentalAnalyzer:
     def from_payloads(
         cls,
         payloads: Mapping[str, Any],
-        good_threshold: float = 70.0,
+        good_threshold: float = 50.0,
     ) -> "FundamentalAnalyzer":
         """Build an analyzer that needs no temporary JSON files."""
         return cls(
@@ -1137,8 +1137,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--good-threshold",
         type=float,
-        default=70.0,
-        help="Minimum 0-100 score for the binary GOOD decision (default: 70)",
+        default=50.0,
+        help="Minimum 0-100 score for the binary GOOD decision (default: 50)",
     )
     parser.add_argument(
         "--output",
