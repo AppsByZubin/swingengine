@@ -13,6 +13,7 @@ RUN python -m pip install --no-cache-dir -r requirements.txt
 COPY main.py ./
 COPY database ./database
 COPY fundamental ./fundamental
+COPY groww ./groww
 COPY slack ./slack
 COPY tracker ./tracker
 COPY upstox ./upstox
