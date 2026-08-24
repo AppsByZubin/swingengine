@@ -17,6 +17,7 @@ from database.repository import (
 from fundamental.scanner import (
     FundamentalScanError,
     FundamentalScanResult,
+    SymbolFundamentalAnalysis,
 )
 from slack.file_exports import (
     CsvFileExporter,
@@ -95,6 +96,11 @@ class FundamentalScanService(Protocol):
         """Screen every NSE equity and return fundamental export rows."""
 
 
+class FundamentalAnalysisService(Protocol):
+    def analyze(self, trading_symbol: str) -> SymbolFundamentalAnalysis:
+        """Score one NSE equity's fundamentals by trading symbol."""
+
+
 def ephemeral(text: str) -> SlackResponse:
     """Build a response visible only to the user who ran the command."""
     return {"response_type": "ephemeral", "text": text}
@@ -153,7 +159,9 @@ def help_command(_: str = "") -> SlackResponse:
         "screen all equities, and upload qualifying stocks as CSV\n\n"
         "*Fundamentals*\n"
         "• `/swingengine fundamental list file` — refresh NSE instruments, "
-        "fundamentally score all equities, and upload decent stocks as CSV\n\n"
+        "fundamentally score all equities, and upload decent stocks as CSV\n"
+        "• `/swingengine fundamental analyze <trading_symbol>` — fundamentally "
+        "score one NSE equity\n\n"
         "*Tracker*\n"
         "• `/swingengine tracker add <trading_symbol>` — start tracking a "
         "saved asset\n"
@@ -536,9 +544,31 @@ def fundamental_command(
     arguments: str = "",
     fundamental_service: FundamentalScanService | None = None,
     file_exporter: CsvFileExporter | None = None,
+    fundamental_analysis_service: FundamentalAnalysisService | None = None,
 ) -> SlackResponse:
+    parts = arguments.strip().split(maxsplit=1)
+    action = parts[0].casefold() if parts else ""
+
+    if action == "analyze":
+        if fundamental_analysis_service is None:
+            return ephemeral("NSE fundamental analysis is not configured.")
+        if len(parts) != 2 or not parts[1].strip():
+            return ephemeral(
+                "Provide a trading symbol: "
+                "`/swingengine fundamental analyze <trading_symbol>`."
+            )
+        symbol = _normalize_trading_symbol(parts[1])
+        try:
+            result = fundamental_analysis_service.analyze(symbol)
+        except FundamentalScanError as error:
+            return ephemeral(f":warning: {error}")
+        return ephemeral(_format_fundamental_analysis(result))
+
     if arguments.strip().casefold() != "list file":
-        return ephemeral("Use `/swingengine fundamental list file`.")
+        return ephemeral(
+            "Use `/swingengine fundamental list file` or "
+            "`/swingengine fundamental analyze <trading_symbol>`."
+        )
     if fundamental_service is None:
         return ephemeral("NSE fundamental evaluation is not configured.")
     if file_exporter is None:
@@ -571,6 +601,54 @@ def fundamental_command(
         initial_comment=summary,
     )
     return file_upload_response(summary, upload)
+
+
+def _format_fundamental_analysis(result: SymbolFundamentalAnalysis) -> str:
+    analysis = result.analysis
+    decision = analysis["decision"]
+    prefix = ":white_check_mark:" if decision == "GOOD" else ":warning:"
+    company = _slack_text(str(analysis.get("company") or result.asset_name))
+    sector = _slack_text(str(analysis.get("sector") or "Unknown"))
+    period = _slack_text(str(analysis.get("latest_financial_period") or "Unknown"))
+
+    lines = [
+        f"{prefix} *{company}* (`{_code_text(result.trading_symbol)}`) — "
+        f"{decision} ({analysis['rating']})",
+        f"Sector: {sector} · Latest financial period: {period}",
+        f"Score: {analysis['score']:.1f}/100 (GOOD requires "
+        f"{analysis['good_threshold']:.1f}+) · Confidence: "
+        f"{analysis['confidence']['score']:.1f}/100 "
+        f"({analysis['confidence']['label']})",
+        "",
+        "*Category scores*",
+    ]
+    for category in analysis["categories"]:
+        score = (
+            "N/A" if category["score"] is None else f"{category['score']:.1f}/100"
+        )
+        lines.append(f"• {_slack_text(category['name'])}: {score}")
+
+    issues = analysis.get("data_issues") or []
+    if issues:
+        lines.append("")
+        lines.append("*Data issues*")
+        for issue in issues[:5]:
+            code = f" [{issue['code']}]" if issue.get("code") else ""
+            lines.append(
+                f"• {_slack_text(issue['endpoint'])}{code}: "
+                f"{_slack_text(issue['message'])}"
+            )
+        if len(issues) > 5:
+            lines.append(f"• …and {len(issues) - 5} more")
+
+    caveats = analysis.get("overall_caveats") or []
+    if caveats:
+        lines.append("")
+        lines.append("*Caveats*")
+        for caveat in caveats:
+            lines.append(f"• {_slack_text(caveat)}")
+
+    return "\n".join(lines)
 
 
 def _format_asset(asset: AssetSearchResult) -> str:
@@ -672,6 +750,7 @@ def build_router(
     evaluation_service: TrackerEvaluationService | None = None,
     momentum_service: MomentumScanService | None = None,
     fundamental_service: FundamentalScanService | None = None,
+    fundamental_analysis_service: FundamentalAnalysisService | None = None,
 ) -> CommandRouter:
     router = CommandRouter()
     router.register("help", help_command)
@@ -711,6 +790,7 @@ def build_router(
             arguments,
             fundamental_service,
             file_exporter,
+            fundamental_analysis_service,
         ),
     )
     router.register(

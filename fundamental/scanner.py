@@ -93,6 +93,13 @@ class EquityCatalog(Protocol):
         """Return normal NSE equities from the refreshed catalogue."""
 
 
+class AssetLookup(Protocol):
+    def search(
+        self, query: str, limit: int | None = None
+    ) -> list[AssetSearchResult]:
+        """Find NSE instruments by trading symbol, name, key, or ISIN."""
+
+
 class FundamentalClient(Protocol):
     def get_fundamental_data(
         self,
@@ -165,7 +172,9 @@ class NSEFundamentalScanner:
         )
         try:
             catalog_instruments, equities = self._refresh_equities()
-            access_token = self._valid_token(now or datetime.now(UTC))
+            access_token = _valid_access_token(
+                self.token_store, now or datetime.now(UTC)
+            )
             result = self._evaluate(
                 catalog_instruments,
                 equities,
@@ -217,20 +226,6 @@ class NSEFundamentalScanner:
                 "The refreshed catalogue contains no NSE equity instruments."
             )
         return catalog_instruments, equities
-
-    def _valid_token(self, current: datetime) -> str:
-        try:
-            token_state = self.token_store.load()
-        except TokenStateError as error:
-            raise FundamentalScanError(
-                "Upstox token state cannot be read."
-            ) from error
-        if not token_state.is_valid(current):
-            raise FundamentalScanError(
-                "A valid Upstox token is required. Use "
-                "`/swingengine auth set <token>`."
-            )
-        return token_state.access_token
 
     def _evaluate(
         self,
@@ -376,6 +371,153 @@ class NSEFundamentalScanner:
             stocks=tuple(stocks),
             good_threshold=self.good_threshold,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class SymbolFundamentalAnalysis:
+    """The full explainable analysis for one NSE equity."""
+
+    trading_symbol: str
+    asset_name: str
+    isin: str
+    analysis: dict[str, Any]
+
+
+class SymbolFundamentalAnalyzer:
+    """Score one NSE equity's fundamentals by trading symbol on demand."""
+
+    def __init__(
+        self,
+        asset_lookup: AssetLookup,
+        client: FundamentalClient,
+        token_store: AccessTokenStore,
+        *,
+        good_threshold: float = DEFAULT_GOOD_THRESHOLD,
+        request_interval_seconds: float = DEFAULT_REQUEST_INTERVAL_SECONDS,
+        sleep_function: Callable[[float], None] = sleep,
+        analyze_payloads: AnalyzePayloads | None = None,
+    ) -> None:
+        if not isfinite(good_threshold) or not 0 <= good_threshold <= 100:
+            raise ValueError("good_threshold must be between 0 and 100")
+        if (
+            not isfinite(request_interval_seconds)
+            or request_interval_seconds < 0
+        ):
+            raise ValueError(
+                "request_interval_seconds must be finite and non-negative"
+            )
+
+        self.asset_lookup = asset_lookup
+        self.client = client
+        self.token_store = token_store
+        self.good_threshold = good_threshold
+        self.request_interval_seconds = request_interval_seconds
+        self._sleep = sleep_function
+        self._analyze_payloads = analyze_payloads or analyze_fundamental_payloads
+
+    def analyze(
+        self, trading_symbol: str, *, now: datetime | None = None
+    ) -> SymbolFundamentalAnalysis:
+        """Fetch and score one NSE equity's fundamentals.
+
+        Raises ``FundamentalScanError`` for anything that keeps a usable
+        result from being produced (unknown symbol, invalid/expired token,
+        or insufficient mandatory fundamentals data).
+        """
+        asset = self._find_asset(trading_symbol)
+        isin = _asset_isin(asset)
+        if isin is None:
+            raise FundamentalScanError(
+                f"`{asset.trading_symbol}` has no usable ISIN for "
+                "fundamental analysis."
+            )
+        access_token = _valid_access_token(
+            self.token_store, now or datetime.now(UTC)
+        )
+
+        payloads: dict[str, Any] = {}
+        for index, (analyzer_key, endpoint, params) in enumerate(
+            FUNDAMENTAL_REQUESTS
+        ):
+            if index:
+                self._sleep(self.request_interval_seconds)
+            try:
+                payloads[analyzer_key] = self.client.get_fundamental_data(
+                    access_token,
+                    isin,
+                    endpoint,
+                    params,
+                )
+            except UpstoxAPIError as error:
+                if error.status_code in {401, 403}:
+                    raise FundamentalScanError(
+                        "Upstox rejected the access token during "
+                        "fundamental analysis. Set a valid token with "
+                        "`/swingengine auth set <token>`."
+                    ) from error
+                LOGGER.warning(
+                    "Fundamentals endpoint failed trading_symbol=%r "
+                    "isin=%r endpoint=%r error=%s",
+                    asset.trading_symbol,
+                    isin,
+                    endpoint,
+                    error,
+                )
+                payloads[analyzer_key] = {
+                    "status": "error",
+                    "errors": [{"message": str(error)}],
+                }
+
+        try:
+            analysis = self._analyze_payloads(payloads, self.good_threshold)
+        except ValueError as error:
+            raise FundamentalScanError(str(error)) from error
+
+        return SymbolFundamentalAnalysis(
+            trading_symbol=asset.trading_symbol,
+            asset_name=asset.name,
+            isin=isin,
+            analysis=analysis,
+        )
+
+    def _find_asset(self, trading_symbol: str) -> AssetSearchResult:
+        normalized = trading_symbol.strip().upper()
+        if not normalized:
+            raise ValueError("trading_symbol cannot be empty")
+        try:
+            matches = self.asset_lookup.search(normalized)
+        except AssetCatalogError as error:
+            raise FundamentalScanError(str(error)) from error
+        asset = next(
+            (
+                match
+                for match in matches
+                if match.trading_symbol.casefold() == normalized.casefold()
+                and match.segment.casefold() == "nse_eq"
+                and match.instrument_type.casefold() == "eq"
+            ),
+            None,
+        )
+        if asset is None:
+            raise FundamentalScanError(
+                f"No NSE equity found for trading symbol `{normalized}`."
+            )
+        return asset
+
+
+def _valid_access_token(token_store: AccessTokenStore, current: datetime) -> str:
+    try:
+        token_state = token_store.load()
+    except TokenStateError as error:
+        raise FundamentalScanError(
+            "Upstox token state cannot be read."
+        ) from error
+    if not token_state.is_valid(current):
+        raise FundamentalScanError(
+            "A valid Upstox token is required. Use "
+            "`/swingengine auth set <token>`."
+        )
+    return token_state.access_token
 
 
 def analyze_fundamental_payloads(

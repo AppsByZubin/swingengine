@@ -10,7 +10,8 @@ from slack_sdk.errors import SlackApiError, SlackClientError
 
 from database.config import DatabaseSettings
 from database.repository import AssetTrackerRepository
-from fundamental.scanner import NSEFundamentalScanner
+from fundamental.scanner import NSEFundamentalScanner, SymbolFundamentalAnalyzer
+from groww.fundamentals import GrowwFundamentalFallback
 from slack.commands import (
     ASSET_IMPORT_MODAL_KEY,
     FILE_UPLOAD_KEY,
@@ -640,9 +641,15 @@ def run() -> None:
         auth_client,
         token_store,
     )
+    fundamental_client = GrowwFundamentalFallback(auth_client)
     fundamental_scanner = NSEFundamentalScanner(
         asset_catalog,
-        auth_client,
+        fundamental_client,
+        token_store,
+    )
+    fundamental_analyzer = SymbolFundamentalAnalyzer(
+        asset_catalog,
+        fundamental_client,
         token_store,
     )
     asset_importer = CsvAssetImporter(
@@ -666,6 +673,7 @@ def run() -> None:
             evaluation_service=tracker_evaluator,
             momentum_service=momentum_scanner,
             fundamental_service=fundamental_scanner,
+            fundamental_analysis_service=fundamental_analyzer,
         ),
         asset_importer,
         tracker_importer,

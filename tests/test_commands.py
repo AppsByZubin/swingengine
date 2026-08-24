@@ -13,6 +13,7 @@ from fundamental.scanner import (
     FundamentalScanError,
     FundamentalScanResult,
     FundamentalStock,
+    SymbolFundamentalAnalysis,
 )
 from slack.commands import CommandRouter, build_router, ephemeral
 from slack.file_exports import CsvFileExporter, SlackFileUpload
@@ -586,6 +587,95 @@ def test_fundamental_command_requires_exact_arguments_and_services(
     assert "not configured" in build_router(
         fundamental_service=FakeFundamentalService()
     ).dispatch("fundamental list file")["text"]
+
+
+def _sample_symbol_analysis() -> SymbolFundamentalAnalysis:
+    return SymbolFundamentalAnalysis(
+        trading_symbol="SUNPHARMA",
+        asset_name="SUN PHARMACEUTICAL IND L",
+        isin="INE044A01036",
+        analysis={
+            "company": "Sun Pharmaceutical Industries",
+            "sector": "Pharmaceuticals",
+            "latest_financial_period": "Mar 2026",
+            "decision": "GOOD",
+            "rating": "STRONG",
+            "score": 82.5,
+            "good_threshold": 70.0,
+            "confidence": {"score": 91.0, "label": "HIGH"},
+            "categories": [
+                {"name": "Valuation", "score": 85.0},
+                {"name": "Profitability", "score": None},
+            ],
+            "data_issues": [
+                {
+                    "endpoint": "cash_flow",
+                    "message": "Endpoint returned no data",
+                    "code": None,
+                },
+            ],
+            "overall_caveats": ["This is a screen, not advice."],
+        },
+    )
+
+
+class FakeFundamentalAnalysisService:
+    def __init__(
+        self,
+        result: SymbolFundamentalAnalysis | None = None,
+        error: FundamentalScanError | None = None,
+    ) -> None:
+        self.result = result or _sample_symbol_analysis()
+        self.error = error
+        self.requested_symbol = ""
+
+    def analyze(self, trading_symbol: str) -> SymbolFundamentalAnalysis:
+        self.requested_symbol = trading_symbol
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+def test_fundamental_analyze_formats_score_and_categories() -> None:
+    service = FakeFundamentalAnalysisService()
+    response = build_router(fundamental_analysis_service=service).dispatch(
+        "fundamental analyze sunpharma"
+    )
+
+    assert service.requested_symbol == "SUNPHARMA"
+    text = response["text"]
+    assert "Sun Pharmaceutical Industries" in text
+    assert "`SUNPHARMA`" in text
+    assert "GOOD (STRONG)" in text
+    assert "82.5/100" in text
+    assert "Valuation: 85.0/100" in text
+    assert "Profitability: N/A" in text
+    assert "cash_flow" in text
+    assert "This is a screen, not advice." in text
+
+
+def test_fundamental_analyze_reports_lookup_failure() -> None:
+    service = FakeFundamentalAnalysisService(
+        error=FundamentalScanError(
+            "No NSE equity found for trading symbol `BOGUS`."
+        )
+    )
+    response = build_router(fundamental_analysis_service=service).dispatch(
+        "fundamental analyze BOGUS"
+    )
+
+    assert response == ephemeral(
+        ":warning: No NSE equity found for trading symbol `BOGUS`."
+    )
+
+
+def test_fundamental_analyze_requires_symbol_and_service() -> None:
+    assert "Provide a trading symbol" in build_router(
+        fundamental_analysis_service=FakeFundamentalAnalysisService()
+    ).dispatch("fundamental analyze")["text"]
+    assert "not configured" in build_router().dispatch(
+        "fundamental analyze SUNPHARMA"
+    )["text"]
 
 
 def test_list_file_requires_csv_export_configuration() -> None:

@@ -10,6 +10,7 @@ from fundamental.scanner import (
     FUNDAMENTAL_REQUESTS,
     FundamentalScanError,
     NSEFundamentalScanner,
+    SymbolFundamentalAnalyzer,
     analyze_fundamental_payloads,
 )
 from upstox.assets import AssetSearchResult
@@ -51,6 +52,24 @@ class Store:
             access_token="token" if self.valid else "",
             validation_status="valid" if self.valid else "unchecked",
         )
+
+
+class SearchCatalog:
+    def __init__(self, equities: list[AssetSearchResult]):
+        self.equities = equities
+        self.queries: list[str] = []
+
+    def search(
+        self, query: str, limit: int | None = None
+    ) -> list[AssetSearchResult]:
+        self.queries.append(query)
+        normalized = query.casefold()
+        return [
+            equity
+            for equity in self.equities
+            if normalized in equity.trading_symbol.casefold()
+            or normalized in equity.name.casefold()
+        ]
 
 
 class Client:
@@ -331,3 +350,106 @@ def test_payload_adapter_rejects_empty_mandatory_data() -> None:
 
     with pytest.raises(ValueError, match="cash_flow"):
         analyze_fundamental_payloads(payloads, 70.0)
+
+
+def test_symbol_analyzer_scores_one_equity_by_trading_symbol() -> None:
+    catalog = SearchCatalog(
+        [
+            asset("SUNPHARMA", "INE044A01036"),
+            asset("SUNTECH", "INE000000001"),
+        ]
+    )
+    client = Client()
+    sleep_calls: list[float] = []
+    analyzer = SymbolFundamentalAnalyzer(
+        catalog,
+        client,
+        Store(),
+        sleep_function=sleep_calls.append,
+        analyze_payloads=fake_analysis,  # type: ignore[arg-type]
+    )
+
+    result = analyzer.analyze("sunpharma", now=datetime(2026, 8, 5, tzinfo=UTC))
+
+    assert catalog.queries == ["SUNPHARMA"]
+    assert result.trading_symbol == "SUNPHARMA"
+    assert result.isin == "INE044A01036"
+    assert result.analysis["score"] == 82.5
+    assert [call[1] for call in client.calls] == [
+        request[1] for request in FUNDAMENTAL_REQUESTS
+    ]
+    assert all(call[0] == "INE044A01036" for call in client.calls)
+    assert sleep_calls == [0.125] * (len(FUNDAMENTAL_REQUESTS) - 1)
+
+
+def test_symbol_analyzer_requires_an_exact_trading_symbol_match() -> None:
+    catalog = SearchCatalog([asset("SUNTECH", "INE000000001")])
+    analyzer = SymbolFundamentalAnalyzer(
+        catalog,
+        Client(),
+        Store(),
+        analyze_payloads=fake_analysis,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(FundamentalScanError, match="SUNPHARMA"):
+        analyzer.analyze("sunpharma")
+
+
+def test_symbol_analyzer_requires_a_valid_token() -> None:
+    catalog = SearchCatalog([asset("SUNPHARMA", "INE044A01036")])
+    analyzer = SymbolFundamentalAnalyzer(
+        catalog,
+        Client(),
+        Store(valid=False),
+        analyze_payloads=fake_analysis,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(FundamentalScanError, match="valid Upstox token"):
+        analyzer.analyze("sunpharma")
+
+
+def test_symbol_analyzer_aborts_on_auth_rejection() -> None:
+    catalog = SearchCatalog([asset("SUNPHARMA", "INE044A01036")])
+    client = Client()
+    client.fail_endpoint = "profile"
+    client.failure_status = 401
+    analyzer = SymbolFundamentalAnalyzer(
+        catalog,
+        client,
+        Store(),
+        request_interval_seconds=0,
+        analyze_payloads=fake_analysis,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(FundamentalScanError, match="rejected the access token"):
+        analyzer.analyze("sunpharma")
+
+
+def test_symbol_analyzer_tolerates_optional_endpoint_failure() -> None:
+    catalog = SearchCatalog([asset("SUNPHARMA", "INE044A01036")])
+    client = Client()
+    client.fail_endpoint = "competitors"
+    analyzer = SymbolFundamentalAnalyzer(
+        catalog,
+        client,
+        Store(),
+        request_interval_seconds=0,
+        analyze_payloads=fake_analysis,  # type: ignore[arg-type]
+    )
+
+    result = analyzer.analyze("sunpharma")
+
+    assert result.analysis["score"] == 82.5
+
+
+def test_symbol_analyzer_reports_insufficient_mandatory_data() -> None:
+    catalog = SearchCatalog([asset("SUNPHARMA", "INE044A01036")])
+    analyzer = SymbolFundamentalAnalyzer(
+        catalog,
+        Client(),
+        Store(),
+        request_interval_seconds=0,
+    )
+
+    with pytest.raises(FundamentalScanError):
+        analyzer.analyze("sunpharma")
