@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -127,6 +128,25 @@ def test_scanner_refreshes_and_exports_only_good_companies() -> None:
     assert client.calls[2][2] == {"type": "consolidated", "fs": "true"}
     assert len(client.calls) == 16
     assert sleep_calls == [0.125] * 15
+
+
+def test_scanner_logs_each_stock_before_evaluation(caplog: Any) -> None:
+    scanner = NSEFundamentalScanner(
+        Catalog([asset("SUNPHARMA", "INE044A01036")]),
+        Client(),
+        Store(),
+        request_interval_seconds=0,
+        analyze_payloads=fake_analysis,  # type: ignore[arg-type]
+    )
+
+    with caplog.at_level(logging.INFO, logger="fundamental.scanner"):
+        scanner.scan(now=datetime(2026, 8, 5, tzinfo=UTC))
+
+    assert (
+        "Evaluating NSE equity fundamentals index=1/1 "
+        "trading_symbol='SUNPHARMA' asset_name='SUNPHARMA LIMITED' "
+        "isin='INE044A01036'"
+    ) in caplog.messages
 
 
 def test_optional_endpoint_failure_reduces_confidence_but_continues() -> None:

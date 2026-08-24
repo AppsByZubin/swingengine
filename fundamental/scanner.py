@@ -263,6 +263,16 @@ class NSEFundamentalScanner:
                 continue
             seen_isins.add(isin)
 
+            LOGGER.info(
+                "Evaluating NSE equity fundamentals index=%d/%d "
+                "trading_symbol=%r asset_name=%r isin=%r",
+                index,
+                len(equities),
+                asset.trading_symbol,
+                asset.name,
+                isin,
+            )
+
             payloads: dict[str, Any] = {}
             for analyzer_key, endpoint, params in FUNDAMENTAL_REQUESTS:
                 if request_count:
