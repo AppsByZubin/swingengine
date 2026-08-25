@@ -623,7 +623,10 @@ def _save_fundamental_asset(
     try:
         tracker_service.add_asset(asset)
     except AssetAlreadyExistsError:
-        return f"Asset `{_code_text(result.trading_symbol)}` is already saved."
+        return (
+            f"Asset `{_code_text(result.trading_symbol)}` is already "
+            "present; skipped."
+        )
     except RepositoryError as error:
         return f":warning: {error}"
     return f":white_check_mark: Saved asset `{_code_text(result.trading_symbol)}`."

@@ -683,7 +683,7 @@ def test_fundamental_analyze_reports_already_saved_asset() -> None:
         tracker_service=AlreadySavedTrackerService(),
     ).dispatch("fundamental analyze sunpharma")
 
-    assert "SUNPHARMA` is already saved" in response["text"]
+    assert "SUNPHARMA` is already present; skipped" in response["text"]
 
 
 def test_fundamental_analyze_does_not_save_when_not_good() -> None:
