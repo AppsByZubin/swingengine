@@ -93,6 +93,7 @@ def test_tracker_csv_contains_database_fields(tmp_path) -> None:
                 is_approved_for_trade=True,
                 amount_allocated=12500.5,
                 added_date=date(2026, 7, 28),
+                has_fno=True,
             )
         ]
     )
@@ -110,6 +111,7 @@ def test_tracker_csv_contains_database_fields(tmp_path) -> None:
             "is_approved_for_trade",
             "amount_allocated",
             "added_date",
+            "has_fno",
         ],
         [
             "SUN PHARMACEUTICAL IND L",
@@ -119,6 +121,7 @@ def test_tracker_csv_contains_database_fields(tmp_path) -> None:
             "True",
             "12500.5",
             "2026-07-28",
+            "True",
         ],
     ]
 
@@ -156,6 +159,7 @@ def test_fundamental_csv_contains_score_and_company_context(tmp_path) -> None:
                 confidence=95.0,
                 sector="Pharmaceuticals",
                 latest_financial_period="Mar 2026",
+                has_fno=True,
             )
         ]
     )
@@ -174,6 +178,7 @@ def test_fundamental_csv_contains_score_and_company_context(tmp_path) -> None:
             "confidence",
             "sector",
             "latest_financial_period",
+            "has_fno",
         ],
         [
             "SUN PHARMACEUTICAL IND L",
@@ -184,6 +189,7 @@ def test_fundamental_csv_contains_score_and_company_context(tmp_path) -> None:
             "95.0",
             "Pharmaceuticals",
             "Mar 2026",
+            "True",
         ],
     ]
 

@@ -30,8 +30,13 @@ def asset(symbol: str, isin: str) -> AssetSearchResult:
 
 
 class Catalog:
-    def __init__(self, equities: list[AssetSearchResult]):
+    def __init__(
+        self,
+        equities: list[AssetSearchResult],
+        fno_isins: frozenset[str] = frozenset(),
+    ):
         self.equities = equities
+        self._fno_isins = fno_isins
         self.events: list[str] = []
 
     def refresh(self) -> int:
@@ -41,6 +46,10 @@ class Catalog:
     def list_equities(self) -> list[AssetSearchResult]:
         self.events.append("list")
         return self.equities
+
+    def fno_isins(self) -> frozenset[str]:
+        self.events.append("fno_isins")
+        return self._fno_isins
 
 
 class Store:
@@ -117,7 +126,8 @@ def test_scanner_refreshes_and_exports_only_good_companies() -> None:
         [
             asset("SUNPHARMA", "INE044A01036"),
             asset("RELIANCE", "INE002A01018"),
-        ]
+        ],
+        fno_isins=frozenset({"INE044A01036"}),
     )
     client = Client()
     sleep_calls: list[float] = []
@@ -133,7 +143,7 @@ def test_scanner_refreshes_and_exports_only_good_companies() -> None:
 
     result = scanner.scan(now=datetime(2026, 8, 5, tzinfo=UTC))
 
-    assert catalog.events == ["refresh", "list"]
+    assert catalog.events == ["refresh", "list", "fno_isins"]
     assert result.catalog_instruments == 12_345
     assert result.equity_assets == 2
     assert result.evaluated == 2
@@ -142,12 +152,27 @@ def test_scanner_refreshes_and_exports_only_good_companies() -> None:
     assert result.endpoint_failures == 0
     assert [stock.trading_symbol for stock in result.stocks] == ["SUNPHARMA"]
     assert result.stocks[0].score == 82.5
+    assert result.stocks[0].has_fno is True
     assert [call[1] for call in client.calls[:8]] == [
         request[1] for request in FUNDAMENTAL_REQUESTS
     ]
     assert client.calls[2][2] == {"type": "consolidated", "fs": "true"}
     assert len(client.calls) == 16
     assert sleep_calls == [0.125] * 15
+
+
+def test_scanner_marks_stocks_without_fno_contracts_as_false() -> None:
+    scanner = NSEFundamentalScanner(
+        Catalog([asset("SUNPHARMA", "INE044A01036")]),
+        Client(),
+        Store(),
+        request_interval_seconds=0,
+        analyze_payloads=fake_analysis,  # type: ignore[arg-type]
+    )
+
+    result = scanner.scan(now=datetime(2026, 8, 5, tzinfo=UTC))
+
+    assert result.stocks[0].has_fno is False
 
 
 def test_scanner_logs_each_stock_before_evaluation(caplog: Any) -> None:

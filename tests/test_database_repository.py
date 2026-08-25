@@ -91,6 +91,7 @@ def test_list_tracker_returns_all_exported_state_fields() -> None:
                 True,
                 12500.5,
                 date(2026, 7, 28),
+                True,
             )
         ]
     )
@@ -107,8 +108,10 @@ def test_list_tracker_returns_all_exported_state_fields() -> None:
     assert entries[0].is_approved_for_trade is True
     assert entries[0].amount_allocated == 12500.5
     assert entries[0].added_date == date(2026, 7, 28)
+    assert entries[0].has_fno is True
     assert "tracker.has_momentum" in connection.query
     assert "tracker.amount_allocated" in connection.query
+    assert "tracker.has_fno" in connection.query
 
 
 def test_update_tracker_trade_settings_changes_only_admin_managed_fields() -> None:
@@ -124,6 +127,7 @@ def test_update_tracker_trade_settings_changes_only_admin_managed_fields() -> No
                 True,
                 7500.0,
                 date(2026, 7, 30),
+                False,
             )
         ]
     )
@@ -214,6 +218,8 @@ def test_qualifying_momentum_is_upserted_with_requested_tracker_state() -> None:
     assert "has_momentum = TRUE" in connection.query
     assert "is_trade_created = FALSE" in connection.query
     assert "is_approved_for_trade = FALSE" in connection.query
+    assert "has_fno = EXCLUDED.has_fno" in connection.query
+    assert connection.parameters == (42, date(2026, 7, 30), 42)
 
 
 def test_nonqualifying_pending_momentum_is_cleared_without_insert() -> None:

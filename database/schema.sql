@@ -186,6 +186,7 @@ CREATE TABLE IF NOT EXISTS public.tracker (
     is_approved_for_trade BOOLEAN NOT NULL DEFAULT FALSE,
     amount_allocated DOUBLE PRECISION NOT NULL DEFAULT 0,
     added_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    has_fno BOOLEAN NOT NULL DEFAULT FALSE,
     CONSTRAINT tracker_asset_fk
         FOREIGN KEY (asset_id)
         REFERENCES public.assets (asset_id),
@@ -196,6 +197,8 @@ CREATE TABLE IF NOT EXISTS public.tracker (
 ALTER TABLE public.tracker
     ADD COLUMN IF NOT EXISTS added_date
         DATE NOT NULL DEFAULT CURRENT_DATE;
+ALTER TABLE public.tracker
+    ADD COLUMN IF NOT EXISTS has_fno BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Commands address both tables by trading symbol, so keep symbols and tracker
 -- membership unambiguous.

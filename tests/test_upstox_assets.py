@@ -237,3 +237,63 @@ def test_list_equities_filters_and_sorts_the_refreshed_catalog(
     equities = AssetCatalog(settings(catalog_file)).list_equities()
 
     assert [asset.trading_symbol for asset in equities] == ["ALPHA", "ZED"]
+
+
+def test_fno_isins_returns_underlying_isins_of_stock_derivatives(
+    tmp_path: Path,
+) -> None:
+    catalog_file = tmp_path / "NSE.json"
+    catalog_file.write_text(
+        json.dumps(
+            [
+                {
+                    "segment": "NSE_EQ",
+                    "name": "ZED LIMITED",
+                    "instrument_type": "EQ",
+                    "instrument_key": "NSE_EQ|INE000000001",
+                    "trading_symbol": "ZED",
+                    "isin": "INE000000001",
+                },
+                {
+                    "segment": "NSE_EQ",
+                    "name": "ALPHA LIMITED",
+                    "instrument_type": "EQ",
+                    "instrument_key": "NSE_EQ|INE000000002",
+                    "trading_symbol": "ALPHA",
+                    "isin": "INE000000002",
+                },
+                {
+                    "segment": "NSE_FO",
+                    "name": "ZED LIMITED",
+                    "instrument_type": "FUT",
+                    "instrument_key": "NSE_FO|100",
+                    "trading_symbol": "ZED FUT",
+                    "underlying_key": "NSE_EQ|INE000000001",
+                    "underlying_symbol": "ZED",
+                    "underlying_type": "EQUITY",
+                },
+                {
+                    "segment": "NSE_FO",
+                    "name": "NIFTY",
+                    "instrument_type": "CE",
+                    "instrument_key": "NSE_FO|200",
+                    "trading_symbol": "NIFTY 25000 CE",
+                    "underlying_key": "NSE_INDEX|NIFTY 50",
+                    "underlying_symbol": "NIFTY",
+                    "underlying_type": "INDEX",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    fno_isins = AssetCatalog(settings(catalog_file)).fno_isins()
+
+    assert fno_isins == frozenset({"INE000000001"})
+
+
+def test_fno_isins_requires_a_refreshed_catalog(tmp_path: Path) -> None:
+    catalog = AssetCatalog(settings(tmp_path / "NSE.json"))
+
+    with pytest.raises(AssetCatalogError, match="instrument refresh"):
+        catalog.fno_isins()

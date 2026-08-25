@@ -69,6 +69,7 @@ class FundamentalStock:
     confidence: float
     sector: str
     latest_financial_period: str
+    has_fno: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +92,9 @@ class EquityCatalog(Protocol):
 
     def list_equities(self) -> list[AssetSearchResult]:
         """Return normal NSE equities from the refreshed catalogue."""
+
+    def fno_isins(self) -> frozenset[str]:
+        """Return ISINs of NSE equities with at least one F&O contract."""
 
 
 class AssetLookup(Protocol):
@@ -171,13 +175,14 @@ class NSEFundamentalScanner:
             self.request_interval_seconds,
         )
         try:
-            catalog_instruments, equities = self._refresh_equities()
+            catalog_instruments, equities, fno_isins = self._refresh_equities()
             access_token = _valid_access_token(
                 self.token_store, now or datetime.now(UTC)
             )
             result = self._evaluate(
                 catalog_instruments,
                 equities,
+                fno_isins,
                 access_token,
                 started_at,
             )
@@ -215,22 +220,26 @@ class NSEFundamentalScanner:
         finally:
             self._scan_lock.release()
 
-    def _refresh_equities(self) -> tuple[int, list[AssetSearchResult]]:
+    def _refresh_equities(
+        self,
+    ) -> tuple[int, list[AssetSearchResult], frozenset[str]]:
         try:
             catalog_instruments = self.catalog.refresh()
             equities = self.catalog.list_equities()
+            fno_isins = self.catalog.fno_isins()
         except AssetCatalogError as error:
             raise FundamentalScanError(str(error)) from error
         if not equities:
             raise FundamentalScanError(
                 "The refreshed catalogue contains no NSE equity instruments."
             )
-        return catalog_instruments, equities
+        return catalog_instruments, equities, fno_isins
 
     def _evaluate(
         self,
         catalog_instruments: int,
         equities: list[AssetSearchResult],
+        fno_isins: frozenset[str],
         access_token: str,
         started_at: float,
     ) -> FundamentalScanResult:
@@ -323,7 +332,9 @@ class NSEFundamentalScanner:
                     payloads,
                     self.good_threshold,
                 )
-                stock = _accepted_stock(asset, isin, analysis)
+                stock = _accepted_stock(
+                    asset, isin, analysis, isin in fno_isins
+                )
             except Exception:
                 failed += 1
                 LOGGER.warning(
@@ -565,6 +576,7 @@ def _accepted_stock(
     asset: AssetSearchResult,
     isin: str,
     analysis: Mapping[str, Any],
+    has_fno: bool,
 ) -> FundamentalStock | None:
     score = float(analysis["score"])
     confidence = float(analysis["confidence"]["score"])
@@ -583,4 +595,5 @@ def _accepted_stock(
         latest_financial_period=str(
             analysis.get("latest_financial_period") or ""
         ),
+        has_fno=has_fno,
     )

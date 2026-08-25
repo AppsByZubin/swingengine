@@ -58,6 +58,7 @@ class TrackerEntry:
     is_approved_for_trade: bool
     amount_allocated: float
     added_date: date
+    has_fno: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,8 +181,8 @@ class AssetTrackerRepository:
             with self._connection() as connection:
                 row = connection.execute(
                     """
-                    INSERT INTO public.tracker (asset_id, added_date)
-                    SELECT asset_id, CURRENT_DATE
+                    INSERT INTO public.tracker (asset_id, added_date, has_fno)
+                    SELECT asset_id, CURRENT_DATE, has_fno
                     FROM public.assets
                     WHERE upper(trading_symbol) = upper(%s)
                     ON CONFLICT (asset_id) DO NOTHING
@@ -192,7 +193,8 @@ class AssetTrackerRepository:
                         is_trade_created,
                         is_approved_for_trade,
                         amount_allocated,
-                        added_date
+                        added_date,
+                        has_fno
                     """,
                     (trading_symbol,),
                 ).fetchone()
@@ -246,6 +248,7 @@ class AssetTrackerRepository:
             is_approved_for_trade=bool(row[4]),
             amount_allocated=float(row[5]),
             added_date=row[6],
+            has_fno=bool(row[7]),
         )
 
     def delete_tracker(self, trading_symbol: str) -> TrackerEntry:
@@ -266,7 +269,8 @@ class AssetTrackerRepository:
                         tracker.is_trade_created,
                         tracker.is_approved_for_trade,
                         tracker.amount_allocated,
-                        tracker.added_date
+                        tracker.added_date,
+                        tracker.has_fno
                     """,
                     (trading_symbol,),
                 ).fetchone()
@@ -297,7 +301,8 @@ class AssetTrackerRepository:
                         tracker.is_trade_created,
                         tracker.is_approved_for_trade,
                         tracker.amount_allocated,
-                        tracker.added_date
+                        tracker.added_date,
+                        tracker.has_fno
                     FROM public.tracker AS tracker
                     JOIN public.assets AS asset
                       ON asset.asset_id = tracker.asset_id
@@ -336,7 +341,8 @@ class AssetTrackerRepository:
                         tracker.is_trade_created,
                         tracker.is_approved_for_trade,
                         tracker.amount_allocated,
-                        tracker.added_date
+                        tracker.added_date,
+                        tracker.has_fno
                     """,
                     (
                         is_approved_for_trade,
@@ -406,19 +412,23 @@ class AssetTrackerRepository:
                             has_momentum,
                             is_trade_created,
                             is_approved_for_trade,
-                            added_date
+                            added_date,
+                            has_fno
                         )
-                        VALUES (%s, TRUE, FALSE, FALSE, %s)
+                        SELECT %s, TRUE, FALSE, FALSE, %s, has_fno
+                        FROM public.assets
+                        WHERE asset_id = %s
                         ON CONFLICT (asset_id) DO UPDATE
                         SET
                             has_momentum = TRUE,
                             is_trade_created = FALSE,
                             is_approved_for_trade = FALSE,
-                            added_date = EXCLUDED.added_date
+                            added_date = EXCLUDED.added_date,
+                            has_fno = EXCLUDED.has_fno
                         WHERE current_tracker.is_trade_created = FALSE
                         RETURNING tracker_details_id
                         """,
-                        (asset_id, evaluation_date),
+                        (asset_id, evaluation_date, asset_id),
                     ).fetchone()
                 else:
                     row = connection.execute(
@@ -471,6 +481,7 @@ def _tracker_entry(row: tuple[Any, ...]) -> TrackerEntry:
         is_approved_for_trade=bool(row[6]),
         amount_allocated=float(row[7]),
         added_date=row[8],
+        has_fno=bool(row[9]),
     )
 
 

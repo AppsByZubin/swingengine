@@ -177,6 +177,7 @@ class FakeFundamentalService:
                     confidence=100.0,
                     sector="Pharmaceuticals",
                     latest_financial_period="Mar 2026",
+                    has_fno=True,
                 ),
             ),
         )

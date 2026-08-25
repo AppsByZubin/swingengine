@@ -135,6 +135,7 @@ class CsvFileExporter:
                 "is_approved_for_trade",
                 "amount_allocated",
                 "added_date",
+                "has_fno",
             ),
             (
                 (
@@ -145,6 +146,7 @@ class CsvFileExporter:
                     entry.is_approved_for_trade,
                     entry.amount_allocated,
                     entry.added_date.isoformat(),
+                    entry.has_fno,
                 )
                 for entry in entries
             ),
@@ -192,6 +194,7 @@ class CsvFileExporter:
                 "confidence",
                 "sector",
                 "latest_financial_period",
+                "has_fno",
             ),
             (
                 (
@@ -203,6 +206,7 @@ class CsvFileExporter:
                     stock.confidence,
                     stock.sector,
                     stock.latest_financial_period,
+                    stock.has_fno,
                 )
                 for stock in stocks
             ),

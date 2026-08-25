@@ -131,6 +131,7 @@ class AssetCatalog:
         self._http_get = http_get or requests.get
         self._lock = RLock()
         self._cache: tuple[_CatalogAsset, ...] | None = None
+        self._fno_isins: frozenset[str] | None = None
         self._cache_signature: tuple[int, int] | None = None
 
     def refresh(self) -> int:
@@ -155,13 +156,14 @@ class AssetCatalog:
                 )
                 self._download(compressed_path)
                 self._unpack(compressed_path, json_path)
-                assets = self._read_catalog(json_path)
+                assets, fno_isins = self._read_catalog(json_path)
 
                 os.chmod(json_path, 0o600)
                 stat = json_path.stat()
                 os.replace(json_path, self.settings.catalog_file)
                 json_path = None
                 self._cache = assets
+                self._fno_isins = fno_isins
                 self._cache_signature = (stat.st_mtime_ns, stat.st_size)
                 LOGGER.info(
                     "Completed Upstox NSE asset catalog refresh "
@@ -250,6 +252,12 @@ class AssetCatalog:
         )
         return equities
 
+    def fno_isins(self) -> frozenset[str]:
+        """Return ISINs of NSE equities with at least one F&O contract."""
+        with self._lock:
+            self._load_catalog()
+            return self._fno_isins or frozenset()
+
     def _download(self, destination: Path) -> None:
         response = self._http_get(
             self.settings.source_url,
@@ -296,24 +304,33 @@ class AssetCatalog:
             return self._cache
 
         try:
-            assets = self._read_catalog(self.settings.catalog_file)
+            assets, fno_isins = self._read_catalog(self.settings.catalog_file)
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
             raise AssetCatalogError(
                 "Unable to read the Upstox NSE asset catalog"
             ) from error
         self._cache = assets
+        self._fno_isins = fno_isins
         self._cache_signature = signature
         return assets
 
     @staticmethod
-    def _read_catalog(path: Path) -> tuple[_CatalogAsset, ...]:
+    def _read_catalog(
+        path: Path,
+    ) -> tuple[tuple[_CatalogAsset, ...], frozenset[str]]:
         with path.open(encoding="utf-8") as handle:
             raw_assets = json.load(handle)
         if not isinstance(raw_assets, list) or not raw_assets:
             raise ValueError("asset catalog must be a non-empty JSON array")
         if not all(isinstance(asset, dict) for asset in raw_assets):
             raise ValueError("each asset catalog entry must be a JSON object")
-        return tuple(_catalog_asset(asset) for asset in raw_assets)
+        assets = tuple(_catalog_asset(asset) for asset in raw_assets)
+        fno_isins = frozenset(
+            isin
+            for asset in raw_assets
+            if (isin := _fno_equity_isin(asset)) is not None
+        )
+        return assets, fno_isins
 
 
 def _temporary_path(parent: Path, prefix: str) -> Path:
@@ -351,6 +368,18 @@ def _catalog_asset(asset: Mapping[str, Any]) -> _CatalogAsset:
         result=result,
         searchable_text="\0".join(_searchable_fields(asset)),
     )
+
+
+def _fno_equity_isin(asset: Mapping[str, Any]) -> str | None:
+    """Return the underlying ISIN for one NSE_FO stock derivative entry."""
+    if str(asset.get("segment", "")).strip().upper() != "NSE_FO":
+        return None
+    if str(asset.get("underlying_type", "")).strip().upper() != "EQUITY":
+        return None
+    underlying_key = str(asset.get("underlying_key", "")).strip()
+    _, _, isin = underlying_key.partition("|")
+    isin = isin.strip().upper()
+    return isin or None
 
 
 def _match_rank(
