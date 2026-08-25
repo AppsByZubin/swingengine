@@ -591,16 +591,17 @@ def test_fundamental_command_requires_exact_arguments_and_services(
     ).dispatch("fundamental list file")["text"]
 
 
-def _sample_symbol_analysis() -> SymbolFundamentalAnalysis:
+def _sample_symbol_analysis(decision: str = "GOOD") -> SymbolFundamentalAnalysis:
     return SymbolFundamentalAnalysis(
         trading_symbol="SUNPHARMA",
         asset_name="SUN PHARMACEUTICAL IND L",
         isin="INE044A01036",
+        instrument_key="NSE_EQ|INE044A01036",
         analysis={
             "company": "Sun Pharmaceutical Industries",
             "sector": "Pharmaceuticals",
             "latest_financial_period": "Mar 2026",
-            "decision": "GOOD",
+            "decision": decision,
             "rating": "STRONG",
             "score": 82.5,
             "good_threshold": 70.0,
@@ -654,6 +655,50 @@ def test_fundamental_analyze_formats_score_and_categories() -> None:
     assert "Profitability: N/A" in text
     assert "cash_flow" in text
     assert "This is a screen, not advice." in text
+
+
+def test_fundamental_analyze_saves_asset_when_good() -> None:
+    service = FakeFundamentalAnalysisService()
+    tracker_service = FakeAssetTrackerService()
+
+    response = build_router(
+        fundamental_analysis_service=service,
+        tracker_service=tracker_service,
+    ).dispatch("fundamental analyze sunpharma")
+
+    assert tracker_service.added_catalog_asset is not None
+    assert tracker_service.added_catalog_asset.trading_symbol == "SUNPHARMA"
+    assert "Saved asset `SUNPHARMA`" in response["text"]
+
+
+def test_fundamental_analyze_reports_already_saved_asset() -> None:
+    service = FakeFundamentalAnalysisService()
+
+    class AlreadySavedTrackerService(FakeAssetTrackerService):
+        def add_asset(self, asset: AssetSearchResult) -> AssetRecord:
+            raise AssetAlreadyExistsError
+
+    response = build_router(
+        fundamental_analysis_service=service,
+        tracker_service=AlreadySavedTrackerService(),
+    ).dispatch("fundamental analyze sunpharma")
+
+    assert "SUNPHARMA` is already saved" in response["text"]
+
+
+def test_fundamental_analyze_does_not_save_when_not_good() -> None:
+    service = FakeFundamentalAnalysisService(
+        result=_sample_symbol_analysis(decision="AVOID")
+    )
+    tracker_service = FakeAssetTrackerService()
+
+    response = build_router(
+        fundamental_analysis_service=service,
+        tracker_service=tracker_service,
+    ).dispatch("fundamental analyze sunpharma")
+
+    assert tracker_service.added_catalog_asset is None
+    assert "Saved asset" not in response["text"]
 
 
 def test_fundamental_analyze_reports_lookup_failure() -> None:

@@ -161,7 +161,7 @@ def help_command(_: str = "") -> SlackResponse:
         "• `/swingengine fundamental list file` — refresh NSE instruments, "
         "fundamentally score all equities, and upload decent stocks as CSV\n"
         "• `/swingengine fundamental analyze <trading_symbol>` — fundamentally "
-        "score one NSE equity\n\n"
+        "score one NSE equity and save it as an asset if it scores GOOD\n\n"
         "*Tracker*\n"
         "• `/swingengine tracker add <trading_symbol>` — start tracking a "
         "saved asset\n"
@@ -545,6 +545,7 @@ def fundamental_command(
     fundamental_service: FundamentalScanService | None = None,
     file_exporter: CsvFileExporter | None = None,
     fundamental_analysis_service: FundamentalAnalysisService | None = None,
+    tracker_service: AssetTrackerService | None = None,
 ) -> SlackResponse:
     parts = arguments.strip().split(maxsplit=1)
     action = parts[0].casefold() if parts else ""
@@ -562,7 +563,11 @@ def fundamental_command(
             result = fundamental_analysis_service.analyze(symbol)
         except FundamentalScanError as error:
             return ephemeral(f":warning: {error}")
-        return ephemeral(_format_fundamental_analysis(result))
+
+        message = _format_fundamental_analysis(result)
+        if result.analysis.get("decision") == "GOOD" and tracker_service is not None:
+            message = f"{message}\n\n{_save_fundamental_asset(result, tracker_service)}"
+        return ephemeral(message)
 
     if arguments.strip().casefold() != "list file":
         return ephemeral(
@@ -601,6 +606,27 @@ def fundamental_command(
         initial_comment=summary,
     )
     return file_upload_response(summary, upload)
+
+
+def _save_fundamental_asset(
+    result: SymbolFundamentalAnalysis,
+    tracker_service: AssetTrackerService,
+) -> str:
+    asset = AssetSearchResult(
+        trading_symbol=result.trading_symbol,
+        name=result.asset_name,
+        segment="NSE_EQ",
+        instrument_type="EQ",
+        instrument_key=result.instrument_key,
+        isin=result.isin,
+    )
+    try:
+        tracker_service.add_asset(asset)
+    except AssetAlreadyExistsError:
+        return f"Asset `{_code_text(result.trading_symbol)}` is already saved."
+    except RepositoryError as error:
+        return f":warning: {error}"
+    return f":white_check_mark: Saved asset `{_code_text(result.trading_symbol)}`."
 
 
 def _format_fundamental_analysis(result: SymbolFundamentalAnalysis) -> str:
@@ -791,6 +817,7 @@ def build_router(
             fundamental_service,
             file_exporter,
             fundamental_analysis_service,
+            tracker_service,
         ),
     )
     router.register(

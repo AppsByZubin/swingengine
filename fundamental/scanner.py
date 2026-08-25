@@ -392,6 +392,7 @@ class SymbolFundamentalAnalysis:
     asset_name: str
     isin: str
     analysis: dict[str, Any]
+    instrument_key: str = ""
 
 
 class SymbolFundamentalAnalyzer:
@@ -489,6 +490,7 @@ class SymbolFundamentalAnalyzer:
             asset_name=asset.name,
             isin=isin,
             analysis=analysis,
+            instrument_key=asset.instrument_key,
         )
 
     def _find_asset(self, trading_symbol: str) -> AssetSearchResult:
