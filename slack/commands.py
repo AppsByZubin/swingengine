@@ -161,7 +161,13 @@ def help_command(_: str = "") -> SlackResponse:
         "• `/swingengine fundamental list file` — refresh NSE instruments, "
         "fundamentally score all equities, and upload decent stocks as CSV\n"
         "• `/swingengine fundamental analyze <trading_symbol>` — fundamentally "
-        "score one NSE equity and save it as an asset if it scores GOOD\n\n"
+        "score one NSE equity\n"
+        "• `/swingengine fundamental analyze update asset <trading_symbol>` "
+        "— fundamentally score one NSE equity and save it as an asset if "
+        "it scores GOOD\n"
+        "• `/swingengine fundamental analyze update assets` — refresh NSE "
+        "instruments, fundamentally score all equities, and save every "
+        "GOOD equity as an asset\n\n"
         "*Tracker*\n"
         "• `/swingengine tracker add <trading_symbol>` — start tracking a "
         "saved asset\n"
@@ -551,23 +557,53 @@ def fundamental_command(
     action = parts[0].casefold() if parts else ""
 
     if action == "analyze":
+        rest = parts[1].strip() if len(parts) == 2 else ""
+        tokens = rest.split()
+        lowered = [token.casefold() for token in tokens]
+
+        if lowered == ["update", "assets"]:
+            if fundamental_service is None:
+                return ephemeral("NSE fundamental evaluation is not configured.")
+            if tracker_service is None:
+                return ephemeral("Asset database is not configured.")
+            try:
+                scan_result = fundamental_service.scan()
+            except FundamentalScanError as error:
+                return ephemeral(f":warning: {error}")
+            return ephemeral(
+                _update_assets_from_scan(scan_result, tracker_service)
+            )
+
         if fundamental_analysis_service is None:
             return ephemeral("NSE fundamental analysis is not configured.")
-        if len(parts) != 2 or not parts[1].strip():
+
+        if len(lowered) == 3 and lowered[0] == "update" and lowered[1] == "asset":
+            if tracker_service is None:
+                return ephemeral("Asset database is not configured.")
+            symbol = _normalize_trading_symbol(tokens[2])
+            try:
+                result = fundamental_analysis_service.analyze(symbol)
+            except FundamentalScanError as error:
+                return ephemeral(f":warning: {error}")
+
+            message = _format_fundamental_analysis(result)
+            if result.analysis.get("decision") == "GOOD":
+                note = _save_fundamental_asset(result, tracker_service)
+            else:
+                note = "Not saved: does not meet the GOOD threshold."
+            return ephemeral(f"{message}\n\n{note}")
+
+        if not rest:
             return ephemeral(
                 "Provide a trading symbol: "
                 "`/swingengine fundamental analyze <trading_symbol>`."
             )
-        symbol = _normalize_trading_symbol(parts[1])
+        symbol = _normalize_trading_symbol(rest)
         try:
             result = fundamental_analysis_service.analyze(symbol)
         except FundamentalScanError as error:
             return ephemeral(f":warning: {error}")
-
-        message = _format_fundamental_analysis(result)
-        if result.analysis.get("decision") == "GOOD" and tracker_service is not None:
-            message = f"{message}\n\n{_save_fundamental_asset(result, tracker_service)}"
-        return ephemeral(message)
+        return ephemeral(_format_fundamental_analysis(result))
 
     if arguments.strip().casefold() != "list file":
         return ephemeral(
@@ -608,6 +644,53 @@ def fundamental_command(
     return file_upload_response(summary, upload)
 
 
+def _add_asset_if_new(
+    asset: AssetSearchResult,
+    tracker_service: AssetTrackerService,
+) -> str:
+    """Add an asset and report the outcome as "added", "present", or an
+    "error: ..." message."""
+    try:
+        tracker_service.add_asset(asset)
+    except AssetAlreadyExistsError:
+        return "present"
+    except RepositoryError as error:
+        return f"error: {error}"
+    return "added"
+
+
+def _update_assets_from_scan(
+    scan_result: FundamentalScanResult,
+    tracker_service: AssetTrackerService,
+) -> str:
+    added = 0
+    present = 0
+    failed = 0
+    for stock in scan_result.stocks:
+        asset = AssetSearchResult(
+            trading_symbol=stock.trading_symbol,
+            name=stock.asset_name,
+            segment="NSE_EQ",
+            instrument_type="EQ",
+            instrument_key=stock.instrument_key,
+            isin=stock.isin,
+        )
+        outcome = _add_asset_if_new(asset, tracker_service)
+        if outcome == "added":
+            added += 1
+        elif outcome == "present":
+            present += 1
+        else:
+            failed += 1
+
+    prefix = ":warning:" if failed else ":white_check_mark:"
+    return (
+        f"{prefix} Fundamental asset update completed. GOOD stocks: "
+        f"{len(scan_result.stocks):,}; added: {added:,}; "
+        f"already present: {present:,}; failed to save: {failed:,}."
+    )
+
+
 def _save_fundamental_asset(
     result: SymbolFundamentalAnalysis,
     tracker_service: AssetTrackerService,
@@ -620,14 +703,14 @@ def _save_fundamental_asset(
         instrument_key=result.instrument_key,
         isin=result.isin,
     )
-    try:
-        tracker_service.add_asset(asset)
-    except AssetAlreadyExistsError:
+    outcome = _add_asset_if_new(asset, tracker_service)
+    if outcome == "present":
         return (
             f"Asset `{_code_text(result.trading_symbol)}` is already "
             "present; skipped."
         )
-    except RepositoryError as error:
+    if outcome != "added":
+        error = outcome.removeprefix("error: ")
         return f":warning: {error}"
     return f":white_check_mark: Saved asset `{_code_text(result.trading_symbol)}`."
 

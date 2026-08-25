@@ -70,6 +70,7 @@ class FundamentalStock:
     sector: str
     latest_financial_period: str
     has_fno: bool
+    instrument_key: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -598,4 +599,5 @@ def _accepted_stock(
             analysis.get("latest_financial_period") or ""
         ),
         has_fno=has_fno,
+        instrument_key=asset.instrument_key,
     )

@@ -657,39 +657,8 @@ def test_fundamental_analyze_formats_score_and_categories() -> None:
     assert "This is a screen, not advice." in text
 
 
-def test_fundamental_analyze_saves_asset_when_good() -> None:
+def test_fundamental_analyze_does_not_save_by_default() -> None:
     service = FakeFundamentalAnalysisService()
-    tracker_service = FakeAssetTrackerService()
-
-    response = build_router(
-        fundamental_analysis_service=service,
-        tracker_service=tracker_service,
-    ).dispatch("fundamental analyze sunpharma")
-
-    assert tracker_service.added_catalog_asset is not None
-    assert tracker_service.added_catalog_asset.trading_symbol == "SUNPHARMA"
-    assert "Saved asset `SUNPHARMA`" in response["text"]
-
-
-def test_fundamental_analyze_reports_already_saved_asset() -> None:
-    service = FakeFundamentalAnalysisService()
-
-    class AlreadySavedTrackerService(FakeAssetTrackerService):
-        def add_asset(self, asset: AssetSearchResult) -> AssetRecord:
-            raise AssetAlreadyExistsError
-
-    response = build_router(
-        fundamental_analysis_service=service,
-        tracker_service=AlreadySavedTrackerService(),
-    ).dispatch("fundamental analyze sunpharma")
-
-    assert "SUNPHARMA` is already present; skipped" in response["text"]
-
-
-def test_fundamental_analyze_does_not_save_when_not_good() -> None:
-    service = FakeFundamentalAnalysisService(
-        result=_sample_symbol_analysis(decision="AVOID")
-    )
     tracker_service = FakeAssetTrackerService()
 
     response = build_router(
@@ -699,6 +668,119 @@ def test_fundamental_analyze_does_not_save_when_not_good() -> None:
 
     assert tracker_service.added_catalog_asset is None
     assert "Saved asset" not in response["text"]
+
+
+def test_fundamental_analyze_update_asset_saves_when_good() -> None:
+    service = FakeFundamentalAnalysisService()
+    tracker_service = FakeAssetTrackerService()
+
+    response = build_router(
+        fundamental_analysis_service=service,
+        tracker_service=tracker_service,
+    ).dispatch("fundamental analyze update asset sunpharma")
+
+    assert service.requested_symbol == "SUNPHARMA"
+    assert tracker_service.added_catalog_asset is not None
+    assert tracker_service.added_catalog_asset.trading_symbol == "SUNPHARMA"
+    assert "Saved asset `SUNPHARMA`" in response["text"]
+
+
+def test_fundamental_analyze_update_asset_reports_already_saved_asset() -> None:
+    service = FakeFundamentalAnalysisService()
+
+    class AlreadySavedTrackerService(FakeAssetTrackerService):
+        def add_asset(self, asset: AssetSearchResult) -> AssetRecord:
+            raise AssetAlreadyExistsError
+
+    response = build_router(
+        fundamental_analysis_service=service,
+        tracker_service=AlreadySavedTrackerService(),
+    ).dispatch("fundamental analyze update asset sunpharma")
+
+    assert "SUNPHARMA` is already present; skipped" in response["text"]
+
+
+def test_fundamental_analyze_update_asset_does_not_save_when_not_good() -> None:
+    service = FakeFundamentalAnalysisService(
+        result=_sample_symbol_analysis(decision="AVOID")
+    )
+    tracker_service = FakeAssetTrackerService()
+
+    response = build_router(
+        fundamental_analysis_service=service,
+        tracker_service=tracker_service,
+    ).dispatch("fundamental analyze update asset sunpharma")
+
+    assert tracker_service.added_catalog_asset is None
+    assert "Not saved" in response["text"]
+
+
+def test_fundamental_analyze_update_asset_requires_tracker_service() -> None:
+    response = build_router(
+        fundamental_analysis_service=FakeFundamentalAnalysisService(),
+    ).dispatch("fundamental analyze update asset sunpharma")
+
+    assert "not configured" in response["text"]
+
+
+def test_fundamental_analyze_update_assets_bulk_saves_good_stocks() -> None:
+    scan_result = FundamentalScanResult(
+        catalog_instruments=10,
+        equity_assets=2,
+        evaluated=2,
+        failed=0,
+        skipped=0,
+        endpoint_failures=0,
+        stocks=(
+            FundamentalStock(
+                asset_name="Sun Pharmaceutical Industries",
+                trading_symbol="SUNPHARMA",
+                isin="INE044A01036",
+                score=82.5,
+                rating="STRONG",
+                confidence=91.0,
+                sector="Pharmaceuticals",
+                latest_financial_period="Mar 2026",
+                has_fno=True,
+                instrument_key="NSE_EQ|INE044A01036",
+            ),
+            FundamentalStock(
+                asset_name="Tata Consultancy Services",
+                trading_symbol="TCS",
+                isin="INE467B01029",
+                score=79.5,
+                rating="GOOD",
+                confidence=100.0,
+                sector="IT - Software",
+                latest_financial_period="Mar 2026",
+                has_fno=True,
+                instrument_key="NSE_EQ|INE467B01029",
+            ),
+        ),
+    )
+
+    class AlreadySavedForTcsTrackerService(FakeAssetTrackerService):
+        def add_asset(self, asset: AssetSearchResult) -> AssetRecord:
+            if asset.trading_symbol == "TCS":
+                raise AssetAlreadyExistsError
+            return super().add_asset(asset)
+
+    class StubFundamentalService:
+        def scan(self) -> FundamentalScanResult:
+            return scan_result
+
+    tracker_service = AlreadySavedForTcsTrackerService()
+    response = build_router(
+        fundamental_service=StubFundamentalService(),
+        tracker_service=tracker_service,
+    ).dispatch("fundamental analyze update assets")
+
+    text = response["text"]
+    assert "GOOD stocks: 2" in text
+    assert "added: 1" in text
+    assert "already present: 1" in text
+    assert "failed to save: 0" in text
+    assert tracker_service.added_catalog_asset.trading_symbol == "SUNPHARMA"
 
 
 def test_fundamental_analyze_reports_lookup_failure() -> None:
