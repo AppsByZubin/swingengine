@@ -36,8 +36,12 @@ class FakeAssetService:
                 segment="NSE_EQ",
                 instrument_type="EQ",
                 instrument_key=f"NSE_EQ|{query}",
+                isin="INE044A01036" if query == "FNOSTOCK" else "",
             )
         ]
+
+    def fno_isins(self) -> frozenset[str]:
+        return frozenset({"INE044A01036"})
 
 
 class FakeRepository:
@@ -45,14 +49,18 @@ class FakeRepository:
         self.symbols = set(symbols or ())
         self.tracked: set[str] = set()
         self.added: list[str] = []
+        self.added_has_fno: dict[str, bool] = {}
         self.deleted: list[str] = []
 
-    def add_asset(self, asset: AssetSearchResult) -> AssetRecord:
+    def add_asset(
+        self, asset: AssetSearchResult, has_fno: bool = False
+    ) -> AssetRecord:
         symbol = asset.trading_symbol
         if symbol in self.symbols:
             raise AssetAlreadyExistsError
         self.symbols.add(symbol)
         self.added.append(symbol)
+        self.added_has_fno[symbol] = has_fno
         return _asset_record(symbol)
 
     def delete_asset(self, trading_symbol: str) -> AssetRecord:
@@ -187,6 +195,26 @@ def test_import_applies_sample_adds_and_delete_with_uppercase_symbols(
     assert repository.added == ["RELIANCE", "INFOSYS", "TMVC", "TMPV"]
     assert repository.deleted == ["TCS"]
     assert asset_service.queries == ["RELIANCE", "INFOSYS", "TMVC", "TMPV"]
+    assert not any(repository.added_has_fno.values())
+
+
+def test_import_marks_fno_eligible_symbols_as_such(tmp_path: Path) -> None:
+    csv_path = tmp_path / "assets.csv"
+    csv_path.write_text(
+        "name,action\nfnostock,add\nreliance,add\n",
+        encoding="utf-8",
+    )
+    repository = FakeRepository()
+
+    summary = _importer(
+        tmp_path,
+        FakeAssetService(),
+        repository,
+    ).import_path(csv_path)
+
+    assert summary.added == 2
+    assert repository.added_has_fno["FNOSTOCK"] is True
+    assert repository.added_has_fno["RELIANCE"] is False
 
 
 def test_import_reports_duplicates_and_row_errors(tmp_path: Path) -> None:

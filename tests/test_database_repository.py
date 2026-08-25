@@ -78,6 +78,34 @@ def test_add_asset_logs_the_database_error_without_credentials(
     assert "database-secret" not in caplog.text
 
 
+def test_add_asset_persists_the_supplied_fno_flag() -> None:
+    connection = StubConnection(
+        [(42, "SUN PHARMACEUTICAL IND L", "SUNPHARMA", "NSE_EQ|INE044A01036", True)]
+    )
+    repository = AssetTrackerRepository(
+        DatabaseSettings(database_url="postgresql://u:p@postgres/swingengine"),
+        connect=lambda *_args, **_kwargs: connection,
+    )
+    asset = AssetSearchResult(
+        trading_symbol="SUNPHARMA",
+        name="SUN PHARMACEUTICAL IND L",
+        segment="NSE_EQ",
+        instrument_type="EQ",
+        instrument_key="NSE_EQ|INE044A01036",
+    )
+
+    record = repository.add_asset(asset, has_fno=True)
+
+    assert record.has_fno is True
+    assert "has_fno" in connection.query
+    assert connection.parameters == (
+        asset.name,
+        asset.trading_symbol,
+        asset.instrument_key,
+        True,
+    )
+
+
 def test_list_tracker_returns_all_exported_state_fields() -> None:
     connection = StubConnection(
         [

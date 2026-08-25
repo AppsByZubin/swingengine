@@ -7,6 +7,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import shutil
 import tempfile
 from threading import RLock
@@ -18,6 +19,8 @@ import requests
 DEFAULT_ASSET_URL = (
     "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
 )
+
+ISIN_PATTERN = re.compile(r"^[A-Z]{2}[A-Z0-9]{10}$")
 
 LOGGER = logging.getLogger(__name__)
 
@@ -368,6 +371,16 @@ def _catalog_asset(asset: Mapping[str, Any]) -> _CatalogAsset:
         result=result,
         searchable_text="\0".join(_searchable_fields(asset)),
     )
+
+
+def asset_isin(asset: AssetSearchResult) -> str | None:
+    """Return one instrument's normalized ISIN, preferring its own field."""
+    candidates = (asset.isin, asset.instrument_key.partition("|")[2])
+    for candidate in candidates:
+        normalized = candidate.strip().upper()
+        if ISIN_PATTERN.fullmatch(normalized):
+            return normalized
+    return None
 
 
 def _fno_equity_isin(asset: Mapping[str, Any]) -> str | None:

@@ -28,7 +28,7 @@ from tracker.momentum_scanner import (
     MomentumScanError,
     MomentumScanResult,
 )
-from upstox.assets import AssetCatalogError, AssetSearchResult
+from upstox.assets import AssetCatalogError, AssetSearchResult, asset_isin
 
 SlackResponse = dict[str, Any]
 CommandHandler = Callable[[str], SlackResponse]
@@ -52,9 +52,14 @@ class AssetService(Protocol):
     def search(self, query: str) -> list[AssetSearchResult]:
         """Find assets related to the supplied query."""
 
+    def fno_isins(self) -> frozenset[str]:
+        """Return ISINs of NSE equities with at least one F&O contract."""
+
 
 class AssetTrackerService(Protocol):
-    def add_asset(self, asset: AssetSearchResult) -> AssetRecord:
+    def add_asset(
+        self, asset: AssetSearchResult, has_fno: bool = False
+    ) -> AssetRecord:
         """Save an asset selected from the NSE catalog."""
 
     def delete_asset(self, trading_symbol: str) -> AssetRecord:
@@ -297,6 +302,7 @@ def asset_command(
         symbol = _normalize_trading_symbol(parts[1])
         try:
             matches = asset_service.search(symbol)
+            fno_isins = asset_service.fno_isins()
         except AssetCatalogError as error:
             return ephemeral(f":warning: {error}")
         asset = next(
@@ -314,7 +320,9 @@ def asset_command(
             )
 
         try:
-            saved_asset = tracker_service.add_asset(asset)
+            saved_asset = tracker_service.add_asset(
+                asset, has_fno=asset_isin(asset) in fno_isins
+            )
         except AssetAlreadyExistsError:
             return ephemeral(
                 f"Asset `{_code_text(asset.trading_symbol)}` is already "
@@ -647,11 +655,12 @@ def fundamental_command(
 def _add_asset_if_new(
     asset: AssetSearchResult,
     tracker_service: AssetTrackerService,
+    has_fno: bool = False,
 ) -> str:
     """Add an asset and report the outcome as "added", "present", or an
     "error: ..." message."""
     try:
-        tracker_service.add_asset(asset)
+        tracker_service.add_asset(asset, has_fno=has_fno)
     except AssetAlreadyExistsError:
         return "present"
     except RepositoryError as error:
@@ -675,7 +684,7 @@ def _update_assets_from_scan(
             instrument_key=stock.instrument_key,
             isin=stock.isin,
         )
-        outcome = _add_asset_if_new(asset, tracker_service)
+        outcome = _add_asset_if_new(asset, tracker_service, stock.has_fno)
         if outcome == "added":
             added += 1
         elif outcome == "present":
@@ -703,7 +712,7 @@ def _save_fundamental_asset(
         instrument_key=result.instrument_key,
         isin=result.isin,
     )
-    outcome = _add_asset_if_new(asset, tracker_service)
+    outcome = _add_asset_if_new(asset, tracker_service, result.has_fno)
     if outcome == "present":
         return (
             f"Asset `{_code_text(result.trading_symbol)}` is already "

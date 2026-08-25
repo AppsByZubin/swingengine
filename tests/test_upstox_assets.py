@@ -12,6 +12,8 @@ from upstox.assets import (
     AssetCatalogError,
     AssetCatalogSettings,
     AssetConfigurationError,
+    AssetSearchResult,
+    asset_isin,
 )
 
 
@@ -297,3 +299,40 @@ def test_fno_isins_requires_a_refreshed_catalog(tmp_path: Path) -> None:
 
     with pytest.raises(AssetCatalogError, match="instrument refresh"):
         catalog.fno_isins()
+
+
+def test_asset_isin_prefers_the_own_isin_field_over_instrument_key() -> None:
+    result = AssetSearchResult(
+        trading_symbol="RELIANCE",
+        name="RELIANCE INDUSTRIES LTD",
+        segment="NSE_EQ",
+        instrument_type="EQ",
+        instrument_key="NSE_EQ|INE000000001",
+        isin="ine002a01018",
+    )
+
+    assert asset_isin(result) == "INE002A01018"
+
+
+def test_asset_isin_falls_back_to_the_instrument_key() -> None:
+    result = AssetSearchResult(
+        trading_symbol="RELIANCE",
+        name="RELIANCE INDUSTRIES LTD",
+        segment="NSE_EQ",
+        instrument_type="EQ",
+        instrument_key="NSE_EQ|INE002A01018",
+    )
+
+    assert asset_isin(result) == "INE002A01018"
+
+
+def test_asset_isin_returns_none_without_a_usable_isin() -> None:
+    result = AssetSearchResult(
+        trading_symbol="RELIANCE",
+        name="RELIANCE INDUSTRIES LTD",
+        segment="NSE_EQ",
+        instrument_type="EQ",
+        instrument_key="NSE_EQ|68672",
+    )
+
+    assert asset_isin(result) is None

@@ -64,8 +64,13 @@ class Store:
 
 
 class SearchCatalog:
-    def __init__(self, equities: list[AssetSearchResult]):
+    def __init__(
+        self,
+        equities: list[AssetSearchResult],
+        fno_isins: frozenset[str] = frozenset({"INE044A01036"}),
+    ):
         self.equities = equities
+        self._fno_isins = fno_isins
         self.queries: list[str] = []
 
     def search(
@@ -79,6 +84,9 @@ class SearchCatalog:
             if normalized in equity.trading_symbol.casefold()
             or normalized in equity.name.casefold()
         ]
+
+    def fno_isins(self) -> frozenset[str]:
+        return self._fno_isins
 
 
 class Client:
@@ -400,12 +408,30 @@ def test_symbol_analyzer_scores_one_equity_by_trading_symbol() -> None:
     assert catalog.queries == ["SUNPHARMA"]
     assert result.trading_symbol == "SUNPHARMA"
     assert result.isin == "INE044A01036"
+    assert result.has_fno is True
     assert result.analysis["score"] == 82.5
     assert [call[1] for call in client.calls] == [
         request[1] for request in FUNDAMENTAL_REQUESTS
     ]
     assert all(call[0] == "INE044A01036" for call in client.calls)
     assert sleep_calls == [0.125] * (len(FUNDAMENTAL_REQUESTS) - 1)
+
+
+def test_symbol_analyzer_marks_non_fno_equity_as_such() -> None:
+    catalog = SearchCatalog(
+        [asset("SUNTECH", "INE000000001")],
+        fno_isins=frozenset({"INE044A01036"}),
+    )
+    analyzer = SymbolFundamentalAnalyzer(
+        catalog,
+        Client(),
+        Store(),
+        analyze_payloads=fake_analysis,  # type: ignore[arg-type]
+    )
+
+    result = analyzer.analyze("suntech")
+
+    assert result.has_fno is False
 
 
 def test_symbol_analyzer_requires_an_exact_trading_symbol_match() -> None:

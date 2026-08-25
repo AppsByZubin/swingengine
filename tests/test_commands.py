@@ -43,7 +43,7 @@ class FakeAssetService:
 
     def search(self, query: str) -> list[AssetSearchResult]:
         self.search_query = query
-        assert query.casefold() in {"sun", "sunpharma"}
+        assert query.casefold() in {"sun", "sunpharma", "suntech"}
         return [
             AssetSearchResult(
                 trading_symbol="SUNPHARMA",
@@ -60,6 +60,9 @@ class FakeAssetService:
                 instrument_key="NSE_EQ|INE000000001",
             ),
         ]
+
+    def fno_isins(self) -> frozenset[str]:
+        return frozenset({"INE044A01036"})
 
 
 class FakeAssetTrackerService:
@@ -82,13 +85,17 @@ class FakeAssetTrackerService:
             added_date=date(2026, 7, 28),
         )
         self.added_catalog_asset: AssetSearchResult | None = None
+        self.added_has_fno = False
         self.deleted_asset_symbol = ""
         self.added_tracker_symbol = ""
         self.deleted_tracker_symbol = ""
         self.updated_tracker_settings: tuple[str, bool, float] | None = None
 
-    def add_asset(self, asset: AssetSearchResult) -> AssetRecord:
+    def add_asset(
+        self, asset: AssetSearchResult, has_fno: bool = False
+    ) -> AssetRecord:
         self.added_catalog_asset = asset
+        self.added_has_fno = has_fno
         return self.asset
 
     def delete_asset(self, trading_symbol: str) -> AssetRecord:
@@ -317,6 +324,20 @@ def test_asset_add_resolves_an_exact_nse_symbol_and_saves_it() -> None:
         tracker_service.added_catalog_asset.instrument_key
         == "NSE_EQ|INE044A01036"
     )
+    assert tracker_service.added_has_fno is True
+
+
+def test_asset_add_marks_non_fno_symbol_as_such() -> None:
+    tracker_service = FakeAssetTrackerService()
+    response = build_router(
+        asset_service=FakeAssetService(),
+        tracker_service=tracker_service,
+    ).dispatch("asset add suntech")
+
+    assert response == ephemeral(":white_check_mark: Saved asset `SUNPHARMA`.")
+    assert tracker_service.added_catalog_asset is not None
+    assert tracker_service.added_catalog_asset.trading_symbol == "SUNTECH"
+    assert tracker_service.added_has_fno is False
 
 
 def test_asset_add_requires_an_exact_trading_symbol() -> None:
@@ -330,7 +351,9 @@ def test_asset_add_requires_an_exact_trading_symbol() -> None:
 
 def test_asset_add_reports_an_existing_saved_asset() -> None:
     class DuplicateAssetService(FakeAssetTrackerService):
-        def add_asset(self, asset: AssetSearchResult) -> AssetRecord:
+        def add_asset(
+            self, asset: AssetSearchResult, has_fno: bool = False
+        ) -> AssetRecord:
             raise AssetAlreadyExistsError
 
     response = build_router(
@@ -596,6 +619,7 @@ def _sample_symbol_analysis(decision: str = "GOOD") -> SymbolFundamentalAnalysis
         trading_symbol="SUNPHARMA",
         asset_name="SUN PHARMACEUTICAL IND L",
         isin="INE044A01036",
+        has_fno=True,
         instrument_key="NSE_EQ|INE044A01036",
         analysis={
             "company": "Sun Pharmaceutical Industries",
@@ -682,6 +706,7 @@ def test_fundamental_analyze_update_asset_saves_when_good() -> None:
     assert service.requested_symbol == "SUNPHARMA"
     assert tracker_service.added_catalog_asset is not None
     assert tracker_service.added_catalog_asset.trading_symbol == "SUNPHARMA"
+    assert tracker_service.added_has_fno is True
     assert "Saved asset `SUNPHARMA`" in response["text"]
 
 
@@ -689,7 +714,9 @@ def test_fundamental_analyze_update_asset_reports_already_saved_asset() -> None:
     service = FakeFundamentalAnalysisService()
 
     class AlreadySavedTrackerService(FakeAssetTrackerService):
-        def add_asset(self, asset: AssetSearchResult) -> AssetRecord:
+        def add_asset(
+            self, asset: AssetSearchResult, has_fno: bool = False
+        ) -> AssetRecord:
             raise AssetAlreadyExistsError
 
     response = build_router(
@@ -760,10 +787,12 @@ def test_fundamental_analyze_update_assets_bulk_saves_good_stocks() -> None:
     )
 
     class AlreadySavedForTcsTrackerService(FakeAssetTrackerService):
-        def add_asset(self, asset: AssetSearchResult) -> AssetRecord:
+        def add_asset(
+            self, asset: AssetSearchResult, has_fno: bool = False
+        ) -> AssetRecord:
             if asset.trading_symbol == "TCS":
                 raise AssetAlreadyExistsError
-            return super().add_asset(asset)
+            return super().add_asset(asset, has_fno)
 
     class StubFundamentalService:
         def scan(self) -> FundamentalScanResult:
@@ -781,6 +810,7 @@ def test_fundamental_analyze_update_assets_bulk_saves_good_stocks() -> None:
     assert "already present: 1" in text
     assert "failed to save: 0" in text
     assert tracker_service.added_catalog_asset.trading_symbol == "SUNPHARMA"
+    assert tracker_service.added_has_fno is True
 
 
 def test_fundamental_analyze_reports_lookup_failure() -> None:

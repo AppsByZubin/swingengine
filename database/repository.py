@@ -86,7 +86,9 @@ class AssetTrackerRepository:
         self._settings = settings
         self._connect = connect
 
-    def add_asset(self, asset: AssetSearchResult) -> AssetRecord:
+    def add_asset(
+        self, asset: AssetSearchResult, has_fno: bool = False
+    ) -> AssetRecord:
         try:
             with self._connection() as connection:
                 row = connection.execute(
@@ -94,9 +96,10 @@ class AssetTrackerRepository:
                     INSERT INTO public.assets (
                         asset_name,
                         trading_symbol,
-                        instrument_key
+                        instrument_key,
+                        has_fno
                     )
-                    VALUES (%s, %s, %s)
+                    VALUES (%s, %s, %s, %s)
                     RETURNING
                         asset_id,
                         asset_name,
@@ -108,6 +111,7 @@ class AssetTrackerRepository:
                         asset.name,
                         asset.trading_symbol,
                         asset.instrument_key or None,
+                        has_fno,
                     ),
                 ).fetchone()
         except psycopg.errors.UniqueViolation as error:

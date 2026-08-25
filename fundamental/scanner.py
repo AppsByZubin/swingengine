@@ -5,13 +5,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import logging
 from math import isfinite
-import re
 from threading import Lock
 from time import monotonic, sleep
 from typing import Any, Protocol
 
 from fundamental.analyzer import FundamentalAnalyzer, MANDATORY_ENDPOINTS
-from upstox.assets import AssetCatalogError, AssetSearchResult
+from upstox.assets import AssetCatalogError, AssetSearchResult, asset_isin
 from upstox.client import UpstoxAPIError
 from upstox.store import TokenState, TokenStateError
 
@@ -20,7 +19,6 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_GOOD_THRESHOLD = 50.0
 DEFAULT_REQUEST_INTERVAL_SECONDS = 0.125
 DEFAULT_PROGRESS_INTERVAL = 100
-ISIN_PATTERN = re.compile(r"^[A-Z]{2}[A-Z0-9]{10}$")
 
 # Analyzer key, Upstox endpoint, and documented query parameters.
 FUNDAMENTAL_REQUESTS: tuple[
@@ -103,6 +101,9 @@ class AssetLookup(Protocol):
         self, query: str, limit: int | None = None
     ) -> list[AssetSearchResult]:
         """Find NSE instruments by trading symbol, name, key, or ISIN."""
+
+    def fno_isins(self) -> frozenset[str]:
+        """Return ISINs of NSE equities with at least one F&O contract."""
 
 
 class FundamentalClient(Protocol):
@@ -253,7 +254,7 @@ class NSEFundamentalScanner:
         request_count = 0
 
         for index, asset in enumerate(equities, start=1):
-            isin = _asset_isin(asset)
+            isin = asset_isin(asset)
             if isin is None or isin in seen_isins:
                 skipped += 1
                 LOGGER.warning(
@@ -393,6 +394,7 @@ class SymbolFundamentalAnalysis:
     asset_name: str
     isin: str
     analysis: dict[str, Any]
+    has_fno: bool = False
     instrument_key: str = ""
 
 
@@ -438,7 +440,7 @@ class SymbolFundamentalAnalyzer:
         or insufficient mandatory fundamentals data).
         """
         asset = self._find_asset(trading_symbol)
-        isin = _asset_isin(asset)
+        isin = asset_isin(asset)
         if isin is None:
             raise FundamentalScanError(
                 f"`{asset.trading_symbol}` has no usable ISIN for "
@@ -491,6 +493,7 @@ class SymbolFundamentalAnalyzer:
             asset_name=asset.name,
             isin=isin,
             analysis=analysis,
+            has_fno=isin in self.asset_lookup.fno_isins(),
             instrument_key=asset.instrument_key,
         )
 
@@ -564,15 +567,6 @@ def _payload_data_available(payload: Any) -> bool:
     if isinstance(data, (Mapping, list, tuple, set, str, bytes)):
         return bool(data)
     return data is not None
-
-
-def _asset_isin(asset: AssetSearchResult) -> str | None:
-    candidates = (asset.isin, asset.instrument_key.partition("|")[2])
-    for candidate in candidates:
-        normalized = candidate.strip().upper()
-        if ISIN_PATTERN.fullmatch(normalized):
-            return normalized
-    return None
 
 
 def _accepted_stock(

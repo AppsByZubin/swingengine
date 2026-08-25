@@ -24,7 +24,7 @@ from database.repository import (
     TrackerEntry,
     TrackerNotFoundError,
 )
-from upstox.assets import AssetCatalogError, AssetSearchResult
+from upstox.assets import AssetCatalogError, AssetSearchResult, asset_isin
 
 LOGGER = logging.getLogger(__name__)
 
@@ -58,9 +58,14 @@ class AssetCatalogService(Protocol):
     def search(self, query: str) -> list[AssetSearchResult]:
         """Find NSE instruments related to a trading symbol."""
 
+    def fno_isins(self) -> frozenset[str]:
+        """Return ISINs of NSE equities with at least one F&O contract."""
+
 
 class AssetRepository(Protocol):
-    def add_asset(self, asset: AssetSearchResult) -> AssetRecord:
+    def add_asset(
+        self, asset: AssetSearchResult, has_fno: bool = False
+    ) -> AssetRecord:
         """Save an asset selected from the NSE catalog."""
 
     def delete_asset(self, trading_symbol: str) -> AssetRecord:
@@ -452,6 +457,7 @@ class CsvAssetImporter(_SlackCsvImporter):
 
         try:
             matches = self._asset_service.search(symbol)
+            fno_isins = self._asset_service.fno_isins()
         except AssetCatalogError as error:
             return (
                 "failed",
@@ -473,7 +479,9 @@ class CsvAssetImporter(_SlackCsvImporter):
             )
 
         try:
-            self._repository.add_asset(asset)
+            self._repository.add_asset(
+                asset, has_fno=asset_isin(asset) in fno_isins
+            )
         except AssetAlreadyExistsError:
             return "already_present", ""
         except RepositoryError as error:
