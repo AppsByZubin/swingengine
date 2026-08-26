@@ -165,6 +165,49 @@ def test_historical_daily_candles_use_one_v3_request() -> None:
     assert "params" not in request
 
 
+def test_historical_hourly_candles_use_one_v3_request() -> None:
+    session = RecordingSession()
+    session.get_response = FakeResponse(
+        200,
+        {
+            "status": "success",
+            "data": {
+                "candles": [
+                    [
+                        "2026-07-29T10:15:00+05:30",
+                        100,
+                        110,
+                        95,
+                        108,
+                        1000,
+                        0,
+                    ]
+                ]
+            },
+        },
+    )
+    client = UpstoxAuthClient(
+        settings(), session  # type: ignore[arg-type]
+    )
+
+    candles = client.get_historical_hourly_candles(
+        "approved-token",
+        "NSE_EQ|INE044A01036",
+        date(2026, 1, 12),
+        date(2026, 7, 29),
+    )
+
+    assert len(candles) == 1
+    assert candles[0].close == 108
+    assert len(session.get_calls) == 1
+    url, request = session.get_calls[0]
+    assert url.endswith(
+        "/v3/historical-candle/"
+        "NSE_EQ%7CINE044A01036/hours/1/2026-07-29/2026-01-12"
+    )
+    assert "params" not in request
+
+
 def test_daily_market_quotes_parse_ltp_and_live_daily_candle() -> None:
     session = RecordingSession()
     session.get_response = FakeResponse(

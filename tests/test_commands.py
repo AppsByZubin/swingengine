@@ -163,6 +163,7 @@ class FakeMomentumService:
                     asset_name="SUN PHARMACEUTICAL IND L",
                     trading_symbol="SUNPHARMA",
                     ltp=1789.25,
+                    side="buy",
                 ),
             ),
             minimum_candles=100,

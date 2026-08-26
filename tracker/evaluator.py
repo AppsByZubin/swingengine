@@ -1,4 +1,5 @@
-"""Evaluate daily EMA/SMA momentum and maintain tracker state."""
+"""Evaluate dual-timeframe (daily close + hourly EMA/ADX ribbon) momentum
+and maintain tracker state."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -25,6 +26,8 @@ ADX_PERIOD = 8
 ADX_THRESHOLD = 30.0
 MOMENTUM_ANGLE_THRESHOLD_DEGREES = 40.0
 MINIMUM_CANDLES = TREND_PERIOD + 2
+DAILY_ANGLE_THRESHOLD_DEGREES = 30.0
+MINIMUM_DAILY_CLOSE_CANDLES = 22
 
 
 class MomentumRepository(Protocol):
@@ -50,6 +53,15 @@ class DailyCandleClient(Protocol):
     ) -> list[DailyCandle]:
         """Return historical candles plus the current trading day."""
 
+    def get_hourly_candles(
+        self,
+        access_token: str,
+        instrument_key: str,
+        from_date: date,
+        through_date: date,
+    ) -> list[DailyCandle]:
+        """Return hourly candles plus the current, still-forming hour."""
+
 
 class AccessTokenStore(Protocol):
     def load(self) -> TokenState:
@@ -62,6 +74,9 @@ class IndicatorCalculationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class MomentumIndicators:
+    """The hourly EMA/ADX ribbon regime, computed from whatever candle
+    series is passed in (hourly, for all current callers)."""
+
     ema_5: float
     ema_8: float
     ema_13: float
@@ -106,12 +121,55 @@ class MomentumIndicators:
 
     @property
     def side(self) -> str | None:
-        """The tracker side implied by the EMA ribbon, if any."""
+        """The side implied by the EMA ribbon, if any."""
         if self.has_up_momentum:
             return "buy"
         if self.has_down_momentum:
             return "sell"
         return None
+
+
+@dataclass(frozen=True, slots=True)
+class DailyCloseMomentum:
+    """The daily-candle confirmation: today's close vs. yesterday's, plus
+    the daily EMA(21) slope."""
+
+    close: float
+    previous_close: float
+    angle_ema_21: float
+    angle_threshold_degrees: float
+
+    @property
+    def side(self) -> str | None:
+        if (
+            self.close > self.previous_close
+            and self.angle_ema_21 > self.angle_threshold_degrees
+        ):
+            return "buy"
+        if (
+            self.close < self.previous_close
+            and self.angle_ema_21 < -self.angle_threshold_degrees
+        ):
+            return "sell"
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class DualTimeframeMomentum:
+    """A momentum side only counts when the daily and hourly signals agree."""
+
+    daily: DailyCloseMomentum
+    hourly: MomentumIndicators
+
+    @property
+    def side(self) -> str | None:
+        if self.daily.side is not None and self.daily.side == self.hourly.side:
+            return self.daily.side
+        return None
+
+    @property
+    def has_momentum(self) -> bool:
+        return self.side is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,7 +185,8 @@ class EvaluationResult:
 
 
 class TrackerMomentumEvaluator:
-    """Screen all eligible saved assets using daily Upstox candles."""
+    """Screen all eligible saved assets using daily and hourly Upstox
+    candles."""
 
     def __init__(
         self,
@@ -154,6 +213,9 @@ class TrackerMomentumEvaluator:
         ).date()
         from_date = local_date - timedelta(
             days=self.settings.lookback_days - 1
+        )
+        hourly_from_date = local_date - timedelta(
+            days=self.settings.momentum_hourly_lookback_days - 1
         )
 
         with self._evaluation_lock:
@@ -201,13 +263,26 @@ class TrackerMomentumEvaluator:
                         from_date,
                         local_date,
                     )
-                    indicators = calculate_momentum_indicators(
+                    hourly_candles = self.candle_client.get_hourly_candles(
+                        token_state.access_token,
+                        candidate.instrument_key,
+                        hourly_from_date,
+                        local_date,
+                    )
+                    daily = calculate_daily_close_momentum(
                         candles,
+                        angle_threshold_degrees=(
+                            self.settings.momentum_daily_angle_threshold_degrees
+                        ),
+                    )
+                    hourly = calculate_momentum_indicators(
+                        hourly_candles,
                         angle_threshold_degrees=(
                             self.settings.momentum_angle_threshold_degrees
                         ),
                     )
-                    has_momentum = indicators.has_up_momentum
+                    combined = DualTimeframeMomentum(daily, hourly)
+                    has_momentum = combined.has_momentum
                     persisted = self.repository.record_momentum_evaluation(
                         candidate.asset_id,
                         has_momentum,
@@ -240,19 +315,25 @@ class TrackerMomentumEvaluator:
 
                 LOGGER.info(
                     "Evaluated tracker momentum trading_symbol=%r "
+                    "daily_close=%.4f daily_previous_close=%.4f "
+                    "daily_angle_ema_21=%.4f "
                     "ema_5=%.4f ema_8=%.4f ema_13=%.4f ema_21=%.4f "
                     "angle_ema_21=%.4f ema_144_high=%.4f ema_144_low=%.4f "
-                    "adx_8=%.4f adx_8_rising=%r has_momentum=%r",
+                    "adx_8=%.4f adx_8_rising=%r side=%r has_momentum=%r",
                     candidate.trading_symbol,
-                    indicators.ema_5,
-                    indicators.ema_8,
-                    indicators.ema_13,
-                    indicators.ema_21,
-                    indicators.angle_ema_21,
-                    indicators.ema_144_high,
-                    indicators.ema_144_low,
-                    indicators.adx_8,
-                    indicators.adx_8_rising,
+                    daily.close,
+                    daily.previous_close,
+                    daily.angle_ema_21,
+                    hourly.ema_5,
+                    hourly.ema_8,
+                    hourly.ema_13,
+                    hourly.ema_21,
+                    hourly.angle_ema_21,
+                    hourly.ema_144_high,
+                    hourly.ema_144_low,
+                    hourly.adx_8,
+                    hourly.adx_8_rising,
+                    combined.side,
                     has_momentum,
                 )
 
@@ -286,21 +367,22 @@ def calculate_momentum_indicators(
     angle_threshold_degrees: float = MOMENTUM_ANGLE_THRESHOLD_DEGREES,
 ) -> MomentumIndicators:
     """Match the notebook's EMA ribbons: momentum (5/8/13/21) and trend (144)
-    of daily OHLC, plus the ADX(8) regime filter."""
+    of the candle series (hourly, for current callers), plus the ADX(8)
+    regime filter."""
     opens = [float(candle.open) for candle in candles]
     highs = [float(candle.high) for candle in candles]
     lows = [float(candle.low) for candle in candles]
     closes = [float(candle.close) for candle in candles]
     if len(closes) < MINIMUM_CANDLES:
         raise IndicatorCalculationError(
-            f"At least {MINIMUM_CANDLES} daily candles are required"
+            f"At least {MINIMUM_CANDLES} candles are required"
         )
     if not all(
         isfinite(value)
         for series in (opens, highs, lows, closes)
         for value in series
     ):
-        raise IndicatorCalculationError("Daily candles contain invalid prices")
+        raise IndicatorCalculationError("Candles contain invalid prices")
 
     emas = {period: _ema(closes, period) for period in MOMENTUM_PERIODS}
     ema_21_series = _ema_series(closes, 21)
@@ -327,6 +409,38 @@ def calculate_momentum_indicators(
         adx_8_rising=adx_series[-1] > adx_series[-2],
         latest_open=opens[-1],
         latest_close=closes[-1],
+    )
+
+
+def calculate_daily_close_momentum(
+    candles: Sequence[DailyCandle],
+    *,
+    angle_threshold_degrees: float = DAILY_ANGLE_THRESHOLD_DEGREES,
+) -> DailyCloseMomentum:
+    """Today's daily close vs. yesterday's, confirmed by the daily EMA(21)
+    slope."""
+    closes = [float(candle.close) for candle in candles]
+    if len(closes) < MINIMUM_DAILY_CLOSE_CANDLES:
+        raise IndicatorCalculationError(
+            f"At least {MINIMUM_DAILY_CLOSE_CANDLES} daily candles are "
+            "required"
+        )
+    if not all(isfinite(value) for value in closes):
+        raise IndicatorCalculationError("Daily candles contain invalid prices")
+
+    ema_21_series = _ema_series(closes, 21)
+    ema_21_prev = ema_21_series[-2]
+    angle_ema_21 = (
+        degrees(atan((ema_21_series[-1] - ema_21_prev) / ema_21_prev * 100))
+        if ema_21_prev
+        else 0.0
+    )
+
+    return DailyCloseMomentum(
+        close=closes[-1],
+        previous_close=closes[-2],
+        angle_ema_21=angle_ema_21,
+        angle_threshold_degrees=angle_threshold_degrees,
     )
 
 

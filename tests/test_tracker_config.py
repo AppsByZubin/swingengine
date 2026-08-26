@@ -19,6 +19,8 @@ def test_tracker_evaluation_defaults_to_weekday_post_market_settings() -> None:
     assert settings.momentum_scan_minimum_candles == 200
     assert settings.momentum_scan_request_interval_seconds == 1
     assert settings.momentum_angle_threshold_degrees == 40
+    assert settings.momentum_daily_angle_threshold_degrees == 30
+    assert settings.momentum_hourly_lookback_days == 60
 
 
 def test_momentum_scan_minimum_candles_can_be_configured() -> None:
@@ -37,6 +39,22 @@ def test_momentum_angle_threshold_degrees_can_be_configured() -> None:
     assert settings.momentum_angle_threshold_degrees == 35
 
 
+def test_momentum_daily_angle_threshold_degrees_can_be_configured() -> None:
+    settings = TrackerEvaluationSettings.from_env(
+        {"SWINGENGINE_MOMENTUM_DAILY_ANGLE_THRESHOLD_DEGREES": "25"}
+    )
+
+    assert settings.momentum_daily_angle_threshold_degrees == 25
+
+
+def test_momentum_hourly_lookback_days_can_be_configured() -> None:
+    settings = TrackerEvaluationSettings.from_env(
+        {"SWINGENGINE_MOMENTUM_HOURLY_LOOKBACK_DAYS": "90"}
+    )
+
+    assert settings.momentum_hourly_lookback_days == 90
+
+
 @pytest.mark.parametrize(
     ("name", "value"),
     [
@@ -50,6 +68,9 @@ def test_momentum_angle_threshold_degrees_can_be_configured() -> None:
         ("SWINGENGINE_MOMENTUM_SCAN_LOOKBACK_DAYS", "199"),
         ("SWINGENGINE_MOMENTUM_ANGLE_THRESHOLD_DEGREES", "0"),
         ("SWINGENGINE_MOMENTUM_ANGLE_THRESHOLD_DEGREES", "90"),
+        ("SWINGENGINE_MOMENTUM_DAILY_ANGLE_THRESHOLD_DEGREES", "0"),
+        ("SWINGENGINE_MOMENTUM_DAILY_ANGLE_THRESHOLD_DEGREES", "90"),
+        ("SWINGENGINE_MOMENTUM_HOURLY_LOOKBACK_DAYS", "0"),
     ],
 )
 def test_invalid_tracker_evaluation_configuration_is_rejected(

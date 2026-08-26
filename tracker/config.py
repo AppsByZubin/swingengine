@@ -88,6 +88,8 @@ class TrackerEvaluationSettings:
     momentum_scan_minimum_candles: int
     momentum_scan_request_interval_seconds: float
     momentum_angle_threshold_degrees: float
+    momentum_daily_angle_threshold_degrees: float
+    momentum_hourly_lookback_days: int
     retry_interval_seconds: int
     poll_interval_seconds: int
 
@@ -169,6 +171,23 @@ class TrackerEvaluationSettings:
                 "SWINGENGINE_MOMENTUM_ANGLE_THRESHOLD_DEGREES must be less "
                 "than 90"
             )
+        momentum_daily_angle_threshold_degrees = _parse_positive_float(
+            values,
+            "SWINGENGINE_MOMENTUM_DAILY_ANGLE_THRESHOLD_DEGREES",
+            30.0,
+            errors,
+        )
+        if momentum_daily_angle_threshold_degrees >= 90:
+            errors.append(
+                "SWINGENGINE_MOMENTUM_DAILY_ANGLE_THRESHOLD_DEGREES must be "
+                "less than 90"
+            )
+        momentum_hourly_lookback_days = _parse_positive_int(
+            values,
+            "SWINGENGINE_MOMENTUM_HOURLY_LOOKBACK_DAYS",
+            60,
+            errors,
+        )
         retry_interval_seconds = _parse_positive_int(
             values,
             "SWINGENGINE_TRACKER_EVALUATION_RETRY_INTERVAL_SECONDS",
@@ -195,6 +214,10 @@ class TrackerEvaluationSettings:
                 momentum_scan_request_interval_seconds
             ),
             momentum_angle_threshold_degrees=momentum_angle_threshold_degrees,
+            momentum_daily_angle_threshold_degrees=(
+                momentum_daily_angle_threshold_degrees
+            ),
+            momentum_hourly_lookback_days=momentum_hourly_lookback_days,
             retry_interval_seconds=retry_interval_seconds,
             poll_interval_seconds=poll_interval_seconds,
         )

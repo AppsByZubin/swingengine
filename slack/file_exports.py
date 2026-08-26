@@ -165,12 +165,13 @@ class CsvFileExporter:
     ) -> SlackFileUpload:
         path = self._write_csv(
             "momentum-list.csv",
-            ("assetname", "trading_symbol", "ltp"),
+            ("assetname", "trading_symbol", "ltp", "side"),
             (
                 (
                     stock.asset_name,
                     stock.trading_symbol,
                     stock.ltp,
+                    stock.side,
                 )
                 for stock in stocks
             ),

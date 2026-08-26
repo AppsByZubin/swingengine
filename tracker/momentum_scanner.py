@@ -12,7 +12,9 @@ from zoneinfo import ZoneInfo
 
 from tracker.config import TrackerEvaluationSettings
 from tracker.evaluator import (
+    DualTimeframeMomentum,
     IndicatorCalculationError,
+    calculate_daily_close_momentum,
     calculate_momentum_indicators,
 )
 from upstox.assets import (
@@ -43,6 +45,7 @@ class MomentumStock:
     asset_name: str
     trading_symbol: str
     ltp: float
+    side: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +85,15 @@ class MomentumMarketClient(Protocol):
         through_date: date,
     ) -> list[DailyCandle]:
         """Return daily history without making an intraday request."""
+
+    def get_historical_hourly_candles(
+        self,
+        access_token: str,
+        instrument_key: str,
+        from_date: date,
+        through_date: date,
+    ) -> list[DailyCandle]:
+        """Return hourly history without making an intraday request."""
 
 
 class AccessTokenStore(Protocol):
@@ -144,6 +156,9 @@ class NSEEmaRibbonScanner:
             days=self.settings.momentum_scan_lookback_days - 1
         )
         historical_through_date = local_date - timedelta(days=1)
+        hourly_from_date = local_date - timedelta(
+            days=self.settings.momentum_hourly_lookback_days - 1
+        )
         LOGGER.info(
             "Starting NSE equity momentum scan local_date=%s from_date=%s "
             "historical_through_date=%s minimum_candles=%d "
@@ -169,6 +184,7 @@ class NSEEmaRibbonScanner:
                 quotes,
                 from_date,
                 historical_through_date,
+                hourly_from_date,
                 local_date,
                 local_timezone,
                 started_at,
@@ -312,6 +328,7 @@ class NSEEmaRibbonScanner:
         quotes: dict[str, DailyMarketQuote],
         from_date: date,
         historical_through_date: date,
+        hourly_from_date: date,
         local_date: date,
         local_timezone: ZoneInfo,
         started_at: float,
@@ -429,13 +446,31 @@ class NSEEmaRibbonScanner:
                         started_at,
                     )
                     continue
-                indicators = calculate_momentum_indicators(
+
+                self._sleep(self.request_interval_seconds)
+                historical_requests += 1
+                hourly_candles = (
+                    self.market_client.get_historical_hourly_candles(
+                        access_token,
+                        instrument_key,
+                        hourly_from_date,
+                        historical_through_date,
+                    )
+                )
+
+                daily = calculate_daily_close_momentum(
                     candles,
+                    angle_threshold_degrees=(
+                        self.settings.momentum_daily_angle_threshold_degrees
+                    ),
+                )
+                hourly = calculate_momentum_indicators(
+                    hourly_candles,
                     angle_threshold_degrees=(
                         self.settings.momentum_angle_threshold_degrees
                     ),
                 )
-                has_momentum = indicators.has_up_momentum
+                side = DualTimeframeMomentum(daily, hourly).side
             except (IndicatorCalculationError, UpstoxAPIError, ValueError):
                 failed += 1
                 LOGGER.warning(
@@ -459,35 +494,41 @@ class NSEEmaRibbonScanner:
                 continue
 
             evaluated += 1
-            if has_momentum:
+            if side is not None:
                 stocks.append(
                     MomentumStock(
                         asset_name=asset.name,
                         trading_symbol=asset.trading_symbol,
                         ltp=quote.last_price,
+                        side=side,
                     )
                 )
             LOGGER.debug(
                 "Evaluated NSE equity momentum index=%d/%d "
                 "trading_symbol=%r instrument_key=%r ltp=%.4f "
+                "daily_close=%.4f daily_previous_close=%.4f "
+                "daily_angle_ema_21=%.4f "
                 "ema_5=%.4f ema_8=%.4f ema_13=%.4f ema_21=%.4f "
                 "angle_ema_21=%.4f ema_144_high=%.4f ema_144_low=%.4f "
-                "adx_8=%.4f adx_8_rising=%r has_momentum=%r",
+                "adx_8=%.4f adx_8_rising=%r side=%r",
                 index,
                 total,
                 asset.trading_symbol,
                 instrument_key,
                 quote.last_price,
-                indicators.ema_5,
-                indicators.ema_8,
-                indicators.ema_13,
-                indicators.ema_21,
-                indicators.angle_ema_21,
-                indicators.ema_144_high,
-                indicators.ema_144_low,
-                indicators.adx_8,
-                indicators.adx_8_rising,
-                has_momentum,
+                daily.close,
+                daily.previous_close,
+                daily.angle_ema_21,
+                hourly.ema_5,
+                hourly.ema_8,
+                hourly.ema_13,
+                hourly.ema_21,
+                hourly.angle_ema_21,
+                hourly.ema_144_high,
+                hourly.ema_144_low,
+                hourly.adx_8,
+                hourly.adx_8_rising,
+                side,
             )
             self._log_progress(
                 index,

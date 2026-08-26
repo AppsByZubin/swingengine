@@ -4,7 +4,9 @@ from math import sin
 from database.repository import MomentumCandidate
 from tracker.config import TrackerEvaluationSettings
 from tracker.evaluator import (
+    DualTimeframeMomentum,
     TrackerMomentumEvaluator,
+    calculate_daily_close_momentum,
     calculate_momentum_indicators,
 )
 from upstox.client import DailyCandle
@@ -143,6 +145,41 @@ def test_weak_adx_disqualifies_a_steep_ribbon_above_the_trend_band() -> None:
     assert spike.side is None
 
 
+def test_daily_close_momentum_requires_close_and_angle_to_agree() -> None:
+    rising = calculate_daily_close_momentum(candles(RISING))
+    assert rising.close > rising.previous_close
+    assert rising.angle_ema_21 > 30
+    assert rising.side == "buy"
+
+    falling = calculate_daily_close_momentum(candles(FALLING))
+    assert falling.close < falling.previous_close
+    assert falling.angle_ema_21 < -30
+    assert falling.side == "sell"
+
+    flat = calculate_daily_close_momentum(candles(FLAT))
+    assert flat.close == flat.previous_close
+    assert flat.side is None
+
+
+def test_dual_timeframe_momentum_requires_both_timeframes_to_agree() -> None:
+    daily_buy = calculate_daily_close_momentum(candles(RISING))
+    daily_sell = calculate_daily_close_momentum(candles(FALLING))
+    hourly_buy = calculate_momentum_indicators(candles(RISING))
+    hourly_sell = calculate_momentum_indicators(candles(FALLING))
+
+    agree_buy = DualTimeframeMomentum(daily_buy, hourly_buy)
+    assert agree_buy.side == "buy"
+    assert agree_buy.has_momentum is True
+
+    disagree = DualTimeframeMomentum(daily_buy, hourly_sell)
+    assert disagree.side is None
+    assert disagree.has_momentum is False
+
+    agree_sell = DualTimeframeMomentum(daily_sell, hourly_sell)
+    assert agree_sell.side == "sell"
+    assert agree_sell.has_momentum is True
+
+
 def test_evaluator_inserts_momentum_and_clears_pending_nonmomentum() -> None:
     candidates = [
         MomentumCandidate(
@@ -190,6 +227,18 @@ def test_evaluator_inserts_momentum_and_clears_pending_nonmomentum() -> None:
         ) -> list[DailyCandle]:
             assert access_token == "token"
             self.ranges.append((from_date, through_date))
+            if instrument_key.endswith("RISING"):
+                return candles(RISING)
+            return candles(FLAT)
+
+        def get_hourly_candles(
+            self,
+            access_token: str,
+            instrument_key: str,
+            from_date: date,
+            through_date: date,
+        ) -> list[DailyCandle]:
+            assert access_token == "token"
             if instrument_key.endswith("RISING"):
                 return candles(RISING)
             return candles(FLAT)

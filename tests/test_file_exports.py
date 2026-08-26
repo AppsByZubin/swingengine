@@ -136,6 +136,7 @@ def test_momentum_csv_contains_requested_fields(tmp_path) -> None:
                 asset_name="SUN PHARMACEUTICAL IND L",
                 trading_symbol="SUNPHARMA",
                 ltp=1789.25,
+                side="buy",
             )
         ]
     )
@@ -145,8 +146,8 @@ def test_momentum_csv_contains_requested_fields(tmp_path) -> None:
 
     assert upload.path == tmp_path / "momentum-list.csv"
     assert rows == [
-        ["assetname", "trading_symbol", "ltp"],
-        ["SUN PHARMACEUTICAL IND L", "SUNPHARMA", "1789.25"],
+        ["assetname", "trading_symbol", "ltp", "side"],
+        ["SUN PHARMACEUTICAL IND L", "SUNPHARMA", "1789.25", "buy"],
     ]
 
 

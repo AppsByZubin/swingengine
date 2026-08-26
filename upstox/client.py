@@ -233,6 +233,83 @@ class UpstoxAuthClient:
         by_date = {candle.timestamp.date(): candle for candle in candles}
         return [by_date[trading_date] for trading_date in sorted(by_date)]
 
+    def get_hourly_candles(
+        self,
+        access_token: str,
+        instrument_key: str,
+        from_date: date,
+        through_date: date,
+    ) -> list[DailyCandle]:
+        """Return hourly candles through the requested date, including today.
+
+        Mirrors ``get_daily_candles``: the V3 historical and intraday
+        endpoints are combined and deduplicated, but by full timestamp since
+        several hourly bars share a calendar date.
+        """
+        if from_date > through_date:
+            raise ValueError("from_date cannot be after through_date")
+        encoded_key = quote(instrument_key, safe="")
+        candles: list[DailyCandle] = []
+
+        historical_to = through_date - timedelta(days=1)
+        if from_date <= historical_to:
+            historical_url = (
+                f"{self.settings.api_base_url}/v3/historical-candle/"
+                f"{encoded_key}/hours/1/{historical_to.isoformat()}/"
+                f"{from_date.isoformat()}"
+            )
+            historical_payload = self._authorized_get(
+                historical_url,
+                access_token,
+                "historical candle",
+            )
+            candles.extend(
+                self._daily_candles(historical_payload, "historical candle")
+            )
+
+        intraday_url = (
+            f"{self.settings.api_base_url}/v3/historical-candle/intraday/"
+            f"{encoded_key}/hours/1"
+        )
+        intraday_payload = self._authorized_get(
+            intraday_url,
+            access_token,
+            "intraday candle",
+        )
+        candles.extend(
+            candle
+            for candle in self._daily_candles(
+                intraday_payload, "intraday candle"
+            )
+            if candle.timestamp.date() == through_date
+        )
+
+        return _deduplicate_by_timestamp(candles)
+
+    def get_historical_hourly_candles(
+        self,
+        access_token: str,
+        instrument_key: str,
+        from_date: date,
+        through_date: date,
+    ) -> list[DailyCandle]:
+        """Return historical hourly candles without an intraday API call."""
+        if from_date > through_date:
+            raise ValueError("from_date cannot be after through_date")
+        encoded_key = quote(instrument_key, safe="")
+        url = (
+            f"{self.settings.api_base_url}/v3/historical-candle/"
+            f"{encoded_key}/hours/1/{through_date.isoformat()}/"
+            f"{from_date.isoformat()}"
+        )
+        payload = self._authorized_get(
+            url,
+            access_token,
+            "historical candle",
+        )
+        candles = self._daily_candles(payload, "historical candle")
+        return _deduplicate_by_timestamp(candles)
+
     def get_daily_market_quotes(
         self,
         access_token: str,
@@ -476,6 +553,13 @@ class UpstoxAuthClient:
                 f"Upstox {operation} returned a non-object response"
             )
         return payload
+
+
+def _deduplicate_by_timestamp(
+    candles: Sequence[DailyCandle],
+) -> list[DailyCandle]:
+    by_timestamp = {candle.timestamp: candle for candle in candles}
+    return [by_timestamp[timestamp] for timestamp in sorted(by_timestamp)]
 
 
 def _retry_delay_seconds(

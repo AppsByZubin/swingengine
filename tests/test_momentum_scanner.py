@@ -22,8 +22,10 @@ from upstox.store import TokenState
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
-def _regime_closes(base_bars: int = 174, rally_bars: int = 25) -> list[float]:
-    """A flat/noisy base followed by a sustained rally.
+def _regime_closes(
+    direction: int = 1, base_bars: int = 174, rally_bars: int = 25
+) -> list[float]:
+    """A flat/noisy base followed by a sustained rally (or decline).
 
     A smooth monotonic ramp pins ADX(8) at 100 (never "rising"), so the base
     needs some noise and the rally needs to be recent enough that ADX is
@@ -32,12 +34,13 @@ def _regime_closes(base_bars: int = 174, rally_bars: int = 25) -> list[float]:
     closes = [100 + 3.0 * sin(index * 0.9) for index in range(base_bars)]
     close = closes[-1]
     for _ in range(rally_bars):
-        close *= 1.02
+        close *= 1 + direction * 0.02
         closes.append(close)
     return closes
 
 
 RISING = _regime_closes()
+FALLING = _regime_closes(direction=-1)
 
 
 def asset(symbol: str) -> AssetSearchResult:
@@ -156,6 +159,24 @@ class Client:
             return candles([100.0] * 198)
         return candles([100.0] * 199)
 
+    def get_historical_hourly_candles(
+        self,
+        access_token: str,
+        instrument_key: str,
+        from_date: date,
+        through_date: date,
+    ) -> list[DailyCandle]:
+        assert access_token == "token"
+        symbol = instrument_key.removeprefix("NSE_EQ|")
+        self.events.append(f"hourly:{symbol}")
+        if symbol == "BAD":
+            raise UpstoxAPIError("historical request failed", 500)
+        if symbol == "RISING":
+            return candles(RISING)
+        if symbol == "SHORT":
+            return candles([100.0] * 198)
+        return candles([100.0] * 199)
+
 
 def settings(
     env: dict[str, str] | None = None,
@@ -196,7 +217,8 @@ def test_scanner_refreshes_first_and_exports_only_momentum(
     assert result.failed == 0
     assert [stock.trading_symbol for stock in result.stocks] == ["RISING"]
     assert result.stocks[0].ltp == pytest.approx(RISING[-1] * 1.02)
-    assert sleep_calls == [1.0]
+    assert result.stocks[0].side == "buy"
+    assert sleep_calls == [1.0, 1.0, 1.0]
     assert client.ranges == [
         ("RISING", date(2025, 7, 31), date(2026, 7, 29)),
         ("FLAT", date(2025, 7, 31), date(2026, 7, 29)),
@@ -227,6 +249,41 @@ def test_scanner_logs_one_asset_failure_and_continues(caplog: Any) -> None:
     assert [stock.trading_symbol for stock in result.stocks] == ["RISING"]
     assert "trading_symbol='BAD'" in caplog.text
     assert "historical request failed" in caplog.text
+
+
+def test_scanner_excludes_a_stock_when_daily_and_hourly_disagree() -> None:
+    events: list[str] = []
+
+    class DisagreeingClient(Client):
+        def get_historical_hourly_candles(
+            self,
+            access_token: str,
+            instrument_key: str,
+            from_date: date,
+            through_date: date,
+        ) -> list[DailyCandle]:
+            symbol = instrument_key.removeprefix("NSE_EQ|")
+            if symbol == "RISING":
+                # Daily says buy; hourly disagrees, so the two must cancel out.
+                return candles(FALLING)
+            return super().get_historical_hourly_candles(
+                access_token, instrument_key, from_date, through_date
+            )
+
+    scanner = NSEEmaRibbonScanner(
+        settings(),
+        Catalog(events, [asset("RISING")]),
+        DisagreeingClient(events),
+        Store(events),
+        request_interval_seconds=0,
+        progress_interval=1,
+    )
+
+    result = scanner.scan(now=datetime(2026, 7, 30, 11, tzinfo=UTC))
+
+    assert result.evaluated == 1
+    assert result.failed == 0
+    assert result.stocks == ()
 
 
 def test_scanner_refreshes_before_rejecting_an_invalid_token() -> None:

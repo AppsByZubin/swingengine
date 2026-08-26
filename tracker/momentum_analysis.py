@@ -9,7 +9,12 @@ from zoneinfo import ZoneInfo
 
 from database.repository import AssetRecord, MomentumCandidate, RepositoryError
 from tracker.config import TrackerEvaluationSettings
-from tracker.evaluator import IndicatorCalculationError, calculate_momentum_indicators
+from tracker.evaluator import (
+    DualTimeframeMomentum,
+    IndicatorCalculationError,
+    calculate_daily_close_momentum,
+    calculate_momentum_indicators,
+)
 from upstox.assets import AssetCatalogError, AssetSearchResult
 from upstox.client import DailyCandle, UpstoxAPIError
 from upstox.store import TokenState, TokenStateError
@@ -52,6 +57,15 @@ class DailyCandleClient(Protocol):
         through_date: date,
     ) -> list[DailyCandle]:
         """Return historical candles plus the current trading day."""
+
+    def get_hourly_candles(
+        self,
+        access_token: str,
+        instrument_key: str,
+        from_date: date,
+        through_date: date,
+    ) -> list[DailyCandle]:
+        """Return hourly candles plus the current, still-forming hour."""
 
 
 class AccessTokenStore(Protocol):
@@ -298,16 +312,29 @@ class MomentumAnalyzer:
         from_date = local_date - timedelta(
             days=self.settings.lookback_days - 1
         )
+        hourly_from_date = local_date - timedelta(
+            days=self.settings.momentum_hourly_lookback_days - 1
+        )
         try:
             candles = self.candle_client.get_daily_candles(
                 access_token, instrument_key, from_date, local_date
             )
-            indicators = calculate_momentum_indicators(
+            hourly_candles = self.candle_client.get_hourly_candles(
+                access_token, instrument_key, hourly_from_date, local_date
+            )
+            daily = calculate_daily_close_momentum(
                 candles,
+                angle_threshold_degrees=(
+                    self.settings.momentum_daily_angle_threshold_degrees
+                ),
+            )
+            hourly = calculate_momentum_indicators(
+                hourly_candles,
                 angle_threshold_degrees=(
                     self.settings.momentum_angle_threshold_degrees
                 ),
             )
+            combined = DualTimeframeMomentum(daily, hourly)
         except (IndicatorCalculationError, UpstoxAPIError) as error:
             LOGGER.warning(
                 "Momentum analysis failed trading_symbol=%r: %s",
@@ -316,12 +343,12 @@ class MomentumAnalyzer:
             )
             return None
 
-        has_momentum = indicators.side is not None
+        has_momentum = combined.has_momentum
         tracker_updated = False
         if update_tracker:
             try:
                 tracker_updated = self.repository.record_momentum_evaluation(
-                    asset_id, has_momentum, local_date, indicators.side
+                    asset_id, has_momentum, local_date, combined.side
                 )
             except RepositoryError as error:
                 LOGGER.warning(
@@ -336,7 +363,7 @@ class MomentumAnalyzer:
             asset_name=asset_name,
             trading_symbol=trading_symbol,
             has_momentum=has_momentum,
-            side=indicators.side,
+            side=combined.side,
             tracker_updated=tracker_updated,
         )
 

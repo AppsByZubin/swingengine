@@ -96,6 +96,20 @@ class Client:
             raise UpstoxAPIError("no data", status_code=404)
         return candles(closes)
 
+    def get_hourly_candles(
+        self,
+        access_token: str,
+        instrument_key: str,
+        from_date: date,
+        through_date: date,
+    ) -> list[DailyCandle]:
+        assert access_token == "token"
+        symbol = instrument_key.removeprefix("NSE_EQ|")
+        closes = self.closes_by_symbol.get(symbol)
+        if closes is None:
+            raise UpstoxAPIError("no data", status_code=404)
+        return candles(closes)
+
 
 class Store:
     def __init__(self, valid: bool = True) -> None:
