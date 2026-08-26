@@ -647,6 +647,7 @@ def run() -> None:
         asset_tracker_repository,
         auth_client,
         token_store,
+        asset_catalog,
     )
     fundamental_client = GrowwFundamentalFallback(auth_client)
     fundamental_scanner = NSEFundamentalScanner(

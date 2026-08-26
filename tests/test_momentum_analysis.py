@@ -5,6 +5,7 @@ import pytest
 from database.repository import AssetRecord, MomentumCandidate
 from tracker.config import TrackerEvaluationSettings
 from tracker.momentum_analysis import MomentumAnalysisError, MomentumAnalyzer
+from upstox.assets import AssetCatalogError, AssetSearchResult
 from upstox.client import DailyCandle, UpstoxAPIError
 from upstox.store import TokenState
 
@@ -106,6 +107,31 @@ class Store:
         )
 
 
+class Catalog:
+    def __init__(self, equities: list[AssetSearchResult]) -> None:
+        self.equities = equities
+        self.queries: list[str] = []
+
+    def search(self, query: str) -> list[AssetSearchResult]:
+        self.queries.append(query)
+        return self.equities
+
+
+class FailingCatalog:
+    def search(self, query: str) -> list[AssetSearchResult]:
+        raise AssetCatalogError("Catalog is unavailable.")
+
+
+def catalog_asset(symbol: str) -> AssetSearchResult:
+    return AssetSearchResult(
+        trading_symbol=symbol,
+        name=f"{symbol} LIMITED",
+        segment="NSE_EQ",
+        instrument_type="EQ",
+        instrument_key=f"NSE_EQ|{symbol}",
+    )
+
+
 RISING = [100 + index * 20 for index in range(60)]
 FALLING = [100 + (60 - index) * 20 for index in range(60)]
 FLAT = [100.0] * 60
@@ -115,6 +141,52 @@ def test_analyze_symbol_requires_a_saved_asset() -> None:
     analyzer = MomentumAnalyzer(settings(), Repository(), Client({}), Store())
 
     with pytest.raises(MomentumAnalysisError, match="not saved"):
+        analyzer.analyze_symbol("MISSING")
+
+
+def test_analyze_symbol_falls_back_to_the_nse_catalog_when_unsaved() -> None:
+    catalog = Catalog([catalog_asset("RISING")])
+    client = Client({"RISING": RISING})
+    analyzer = MomentumAnalyzer(
+        settings(), Repository(), client, Store(), catalog
+    )
+
+    result = analyzer.analyze_symbol(
+        "rising", now=datetime(2026, 7, 30, 11, 0, tzinfo=UTC)
+    )
+
+    assert catalog.queries == ["RISING"]
+    assert result.asset_id is None
+    assert result.side == "buy"
+    assert result.tracker_updated is False
+
+
+def test_analyze_symbol_catalog_fallback_rejects_a_tracker_update() -> None:
+    catalog = Catalog([catalog_asset("RISING")])
+    analyzer = MomentumAnalyzer(
+        settings(), Repository(), Client({}), Store(), catalog
+    )
+
+    with pytest.raises(MomentumAnalysisError, match="not saved"):
+        analyzer.analyze_symbol("RISING", update_tracker=True)
+
+
+def test_analyze_symbol_catalog_fallback_requires_an_exact_match() -> None:
+    catalog = Catalog([catalog_asset("OTHER")])
+    analyzer = MomentumAnalyzer(
+        settings(), Repository(), Client({}), Store(), catalog
+    )
+
+    with pytest.raises(MomentumAnalysisError, match="No exact NSE trading symbol"):
+        analyzer.analyze_symbol("MISSING")
+
+
+def test_analyze_symbol_reports_catalog_errors() -> None:
+    analyzer = MomentumAnalyzer(
+        settings(), Repository(), Client({}), Store(), FailingCatalog()
+    )
+
+    with pytest.raises(MomentumAnalysisError, match="Catalog is unavailable"):
         analyzer.analyze_symbol("MISSING")
 
 

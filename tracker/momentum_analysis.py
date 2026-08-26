@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from database.repository import AssetRecord, MomentumCandidate, RepositoryError
 from tracker.config import TrackerEvaluationSettings
 from tracker.evaluator import IndicatorCalculationError, calculate_momentum_indicators
+from upstox.assets import AssetCatalogError, AssetSearchResult
 from upstox.client import DailyCandle, UpstoxAPIError
 from upstox.store import TokenState, TokenStateError
 
@@ -58,11 +59,20 @@ class AccessTokenStore(Protocol):
         """Load the current token state."""
 
 
+class AssetLookup(Protocol):
+    def search(self, query: str) -> list[AssetSearchResult]:
+        """Find NSE instruments related to a trading symbol."""
+
+
 @dataclass(frozen=True, slots=True)
 class SymbolMomentumAnalysis:
-    """The momentum screen outcome for one saved asset."""
+    """The momentum screen outcome for one asset.
 
-    asset_id: int
+    ``asset_id`` is None when the symbol was resolved from the NSE catalog
+    rather than the saved asset table (it is never tracked in that case).
+    """
+
+    asset_id: int | None
     asset_name: str
     trading_symbol: str
     has_momentum: bool
@@ -87,11 +97,13 @@ class MomentumAnalyzer:
         repository: MomentumAnalysisRepository,
         candle_client: DailyCandleClient,
         token_store: AccessTokenStore,
+        asset_lookup: AssetLookup | None = None,
     ):
         self.settings = settings
         self.repository = repository
         self.candle_client = candle_client
         self.token_store = token_store
+        self.asset_lookup = asset_lookup
 
     def analyze_symbol(
         self,
@@ -100,7 +112,13 @@ class MomentumAnalyzer:
         update_tracker: bool = False,
         now: datetime | None = None,
     ) -> SymbolMomentumAnalysis:
-        """Analyze one saved asset's trading symbol for momentum."""
+        """Analyze one trading symbol for momentum.
+
+        Saved assets are analyzed directly. A symbol that is not saved is
+        instead resolved from the NSE instrument catalog (backed by
+        ``NSE.json``) and can only be analyzed, never used to update the
+        tracker, since it has no asset row to update.
+        """
         normalized = trading_symbol.strip().upper()
         if not normalized:
             raise MomentumAnalysisError("Provide a trading symbol.")
@@ -108,11 +126,15 @@ class MomentumAnalyzer:
             asset = self.repository.find_asset_by_trading_symbol(normalized)
         except RepositoryError as error:
             raise MomentumAnalysisError(str(error)) from error
+
         if asset is None:
-            raise MomentumAnalysisError(
-                f"Asset `{normalized}` is not saved. Add it first with "
-                "`/swingengine asset add <trading_symbol>`."
-            )
+            if update_tracker:
+                raise MomentumAnalysisError(
+                    f"Asset `{normalized}` is not saved. Add it first with "
+                    "`/swingengine asset add <trading_symbol>`."
+                )
+            return self._analyze_unsaved_symbol(normalized, now)
+
         if not asset.instrument_key:
             raise MomentumAnalysisError(
                 f"Asset `{normalized}` has no instrument key."
@@ -127,6 +149,49 @@ class MomentumAnalyzer:
             access_token,
             local_date,
             update_tracker=update_tracker,
+        )
+        if result is None:
+            raise MomentumAnalysisError(
+                f"Unable to analyze `{normalized}`: not enough daily candles."
+            )
+        return result
+
+    def _analyze_unsaved_symbol(
+        self, normalized: str, now: datetime | None
+    ) -> SymbolMomentumAnalysis:
+        if self.asset_lookup is None:
+            raise MomentumAnalysisError(
+                f"Asset `{normalized}` is not saved. Add it first with "
+                "`/swingengine asset add <trading_symbol>`."
+            )
+        try:
+            matches = self.asset_lookup.search(normalized)
+        except AssetCatalogError as error:
+            raise MomentumAnalysisError(str(error)) from error
+        asset = next(
+            (
+                match
+                for match in matches
+                if match.trading_symbol.casefold() == normalized.casefold()
+                and match.segment.casefold() == "nse_eq"
+                and match.instrument_type.casefold() == "eq"
+            ),
+            None,
+        )
+        if asset is None or not asset.instrument_key:
+            raise MomentumAnalysisError(
+                f"No exact NSE trading symbol found for `{normalized}`."
+            )
+
+        access_token, local_date = self._valid_token_and_date(now)
+        result = self._analyze_one(
+            None,
+            asset.name,
+            asset.trading_symbol,
+            asset.instrument_key,
+            access_token,
+            local_date,
+            update_tracker=False,
         )
         if result is None:
             raise MomentumAnalysisError(
@@ -221,7 +286,7 @@ class MomentumAnalyzer:
 
     def _analyze_one(
         self,
-        asset_id: int,
+        asset_id: int | None,
         asset_name: str,
         trading_symbol: str,
         instrument_key: str,
