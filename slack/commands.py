@@ -24,6 +24,11 @@ from slack.file_exports import (
     FileExportError,
     SlackFileUpload,
 )
+from tracker.momentum_analysis import (
+    MomentumAnalysisBatch,
+    MomentumAnalysisError,
+    SymbolMomentumAnalysis,
+)
 from tracker.momentum_scanner import (
     MomentumScanError,
     MomentumScanResult,
@@ -96,6 +101,21 @@ class MomentumScanService(Protocol):
         """Screen every NSE equity and return momentum export rows."""
 
 
+class MomentumAnalysisService(Protocol):
+    def analyze_symbol(
+        self, trading_symbol: str, *, update_tracker: bool = False
+    ) -> SymbolMomentumAnalysis:
+        """Analyze one saved asset's trading symbol for momentum."""
+
+    def analyze_assets(
+        self, *, update_tracker: bool = False
+    ) -> MomentumAnalysisBatch:
+        """Analyze every saved asset for momentum."""
+
+    def analyze_tracker(self) -> MomentumAnalysisBatch:
+        """Re-check every tracked asset and clear momentum/side that lapsed."""
+
+
 class FundamentalScanService(Protocol):
     def scan(self) -> FundamentalScanResult:
         """Screen every NSE equity and return fundamental export rows."""
@@ -161,7 +181,17 @@ def help_command(_: str = "") -> SlackResponse:
         "• `/swingengine asset upload` — upload an add/delete CSV\n\n"
         "*Momentum*\n"
         "• `/swingengine momentum list file` — refresh NSE instruments, "
-        "screen all equities, and upload qualifying stocks as CSV\n\n"
+        "screen all equities, and upload qualifying stocks as CSV\n"
+        "• `/swingengine momentum analyze <trading_symbol>` — check one "
+        "saved asset for momentum and its side (buy/sell)\n"
+        "• `/swingengine momentum analyze <trading_symbol> update tracker` "
+        "— same, and update the tracker's has_momentum/side if it qualifies\n"
+        "• `/swingengine momentum analyze assets` — check every saved "
+        "asset for momentum and side\n"
+        "• `/swingengine momentum analyze assets update tracker` — same, "
+        "and update the tracker for every qualifying asset\n"
+        "• `/swingengine momentum analyze tracker` — re-check every "
+        "tracked asset and clear has_momentum/side for any that lapsed\n\n"
         "*Fundamentals*\n"
         "• `/swingengine fundamental list file` — refresh NSE instruments, "
         "fundamentally score all equities, and upload decent stocks as CSV\n"
@@ -513,13 +543,72 @@ def tracker_command(
     )
 
 
+MOMENTUM_ANALYZE_USAGE = (
+    "`/swingengine momentum analyze <trading_symbol>|assets|tracker "
+    "[update tracker]`."
+)
+
+
 def momentum_command(
     arguments: str = "",
     momentum_service: MomentumScanService | None = None,
     file_exporter: CsvFileExporter | None = None,
+    momentum_analysis_service: MomentumAnalysisService | None = None,
 ) -> SlackResponse:
+    parts = arguments.strip().split(maxsplit=1)
+    action = parts[0].casefold() if parts else ""
+
+    if action == "analyze":
+        if momentum_analysis_service is None:
+            return ephemeral("Momentum analysis is not configured.")
+        rest = parts[1].strip() if len(parts) == 2 else ""
+        tokens = rest.split()
+        lowered = [token.casefold() for token in tokens]
+        if not tokens:
+            return ephemeral(f"Use {MOMENTUM_ANALYZE_USAGE}")
+
+        if lowered == ["tracker"]:
+            try:
+                batch = momentum_analysis_service.analyze_tracker()
+            except MomentumAnalysisError as error:
+                return ephemeral(f":warning: {error}")
+            return ephemeral(_format_momentum_batch("Tracker", batch))
+
+        update_tracker = False
+        symbol_tokens = tokens
+        if len(lowered) >= 3 and lowered[-2:] == ["update", "tracker"]:
+            update_tracker = True
+            symbol_tokens = tokens[:-2]
+
+        if (
+            len(symbol_tokens) == 1
+            and symbol_tokens[0].casefold() == "assets"
+        ):
+            try:
+                batch = momentum_analysis_service.analyze_assets(
+                    update_tracker=update_tracker
+                )
+            except MomentumAnalysisError as error:
+                return ephemeral(f":warning: {error}")
+            return ephemeral(_format_momentum_batch("Assets", batch))
+
+        if len(symbol_tokens) != 1 or not symbol_tokens[0].strip():
+            return ephemeral(f"Use {MOMENTUM_ANALYZE_USAGE}")
+
+        symbol = _normalize_trading_symbol(symbol_tokens[0])
+        try:
+            result = momentum_analysis_service.analyze_symbol(
+                symbol, update_tracker=update_tracker
+            )
+        except MomentumAnalysisError as error:
+            return ephemeral(f":warning: {error}")
+        return ephemeral(_format_momentum_analysis(result))
+
     if arguments.strip().casefold() != "list file":
-        return ephemeral("Use `/swingengine momentum list file`.")
+        return ephemeral(
+            "Use `/swingengine momentum list file` or "
+            f"{MOMENTUM_ANALYZE_USAGE}"
+        )
     if momentum_service is None:
         return ephemeral("NSE momentum evaluation is not configured.")
     if file_exporter is None:
@@ -820,6 +909,38 @@ def _format_tracker(entry: TrackerEntry) -> str:
     )
 
 
+def _format_momentum_analysis(result: SymbolMomentumAnalysis) -> str:
+    prefix = ":white_check_mark:" if result.has_momentum else ":warning:"
+    lines = [
+        f"{prefix} `{_code_text(result.trading_symbol)}` momentum: "
+        f"{result.has_momentum} · side: {result.side or 'none'}",
+    ]
+    if result.tracker_updated:
+        lines.append("Tracker updated.")
+    return "\n".join(lines)
+
+
+def _format_momentum_batch(label: str, batch: MomentumAnalysisBatch) -> str:
+    momentum_count = sum(1 for result in batch.results if result.has_momentum)
+    prefix = ":warning:" if batch.failed else ":white_check_mark:"
+    lines = [
+        f"{prefix} {label} momentum analysis completed for "
+        f"{len(batch.results):,} symbol(s). Momentum: {momentum_count:,}; "
+        f"failed: {batch.failed:,}."
+    ]
+    shown = batch.results[:20]
+    if shown:
+        lines.append("")
+        lines.extend(
+            f"• `{_code_text(result.trading_symbol)}` — momentum: "
+            f"{result.has_momentum}, side: {result.side or 'none'}"
+            for result in shown
+        )
+        if len(batch.results) > 20:
+            lines.append(f"• …and {len(batch.results) - 20:,} more")
+    return "\n".join(lines)
+
+
 def _normalize_trading_symbol(value: str) -> str:
     """Normalize Slack trading symbols to the NSE catalog representation."""
     return value.strip().upper()
@@ -870,6 +991,7 @@ def build_router(
     file_exporter: CsvFileExporter | None = None,
     evaluation_service: TrackerEvaluationService | None = None,
     momentum_service: MomentumScanService | None = None,
+    momentum_analysis_service: MomentumAnalysisService | None = None,
     fundamental_service: FundamentalScanService | None = None,
     fundamental_analysis_service: FundamentalAnalysisService | None = None,
 ) -> CommandRouter:
@@ -903,6 +1025,7 @@ def build_router(
             arguments,
             momentum_service,
             file_exporter,
+            momentum_analysis_service,
         ),
     )
     router.register(

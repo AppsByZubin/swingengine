@@ -17,6 +17,11 @@ from fundamental.scanner import (
 )
 from slack.commands import CommandRouter, build_router, ephemeral
 from slack.file_exports import CsvFileExporter, SlackFileUpload
+from tracker.momentum_analysis import (
+    MomentumAnalysisBatch,
+    MomentumAnalysisError,
+    SymbolMomentumAnalysis,
+)
 from tracker.momentum_scanner import (
     MomentumScanError,
     MomentumScanResult,
@@ -164,6 +169,67 @@ class FakeMomentumService:
         )
 
 
+class FakeMomentumAnalysisService:
+    def __init__(self) -> None:
+        self.symbol_calls: list[tuple[str, bool]] = []
+        self.assets_calls: list[bool] = []
+        self.tracker_calls = 0
+
+    def analyze_symbol(
+        self, trading_symbol: str, *, update_tracker: bool = False
+    ) -> SymbolMomentumAnalysis:
+        self.symbol_calls.append((trading_symbol, update_tracker))
+        return SymbolMomentumAnalysis(
+            asset_id=42,
+            asset_name="SUN PHARMACEUTICAL IND L",
+            trading_symbol=trading_symbol,
+            has_momentum=True,
+            side="buy",
+            tracker_updated=update_tracker,
+        )
+
+    def analyze_assets(
+        self, *, update_tracker: bool = False
+    ) -> MomentumAnalysisBatch:
+        self.assets_calls.append(update_tracker)
+        return MomentumAnalysisBatch(
+            results=(
+                SymbolMomentumAnalysis(
+                    asset_id=42,
+                    asset_name="SUN PHARMACEUTICAL IND L",
+                    trading_symbol="SUNPHARMA",
+                    has_momentum=True,
+                    side="buy",
+                    tracker_updated=update_tracker,
+                ),
+                SymbolMomentumAnalysis(
+                    asset_id=43,
+                    asset_name="FLAT LIMITED",
+                    trading_symbol="FLAT",
+                    has_momentum=False,
+                    side=None,
+                ),
+            ),
+            failed=0,
+        )
+
+    def analyze_tracker(self) -> MomentumAnalysisBatch:
+        self.tracker_calls += 1
+        return MomentumAnalysisBatch(
+            results=(
+                SymbolMomentumAnalysis(
+                    asset_id=43,
+                    asset_name="FLAT LIMITED",
+                    trading_symbol="FLAT",
+                    has_momentum=False,
+                    side=None,
+                    tracker_updated=True,
+                ),
+            ),
+            failed=0,
+        )
+
+
 class FakeFundamentalService:
     def scan(self) -> FundamentalScanResult:
         return FundamentalScanResult(
@@ -213,6 +279,11 @@ def test_help_lists_every_supported_command_and_disabled_workflow() -> None:
         "• `/swingengine asset list`",
         "• `/swingengine asset upload`",
         "• `/swingengine momentum list file`",
+        "• `/swingengine momentum analyze <trading_symbol>`",
+        "• `/swingengine momentum analyze <trading_symbol> update tracker`",
+        "• `/swingengine momentum analyze assets`",
+        "• `/swingengine momentum analyze assets update tracker`",
+        "• `/swingengine momentum analyze tracker`",
         "• `/swingengine fundamental list file`",
         "• `/swingengine tracker add <trading_symbol>`",
         "• `/swingengine tracker delete <trading_symbol>`",
@@ -569,6 +640,88 @@ def test_momentum_command_requires_exact_arguments_and_services(tmp_path) -> Non
     assert "not configured" in build_router(
         momentum_service=FakeMomentumService()
     ).dispatch("momentum list file")["text"]
+
+
+def test_momentum_analyze_symbol_reports_momentum_and_side() -> None:
+    service = FakeMomentumAnalysisService()
+    response = build_router(momentum_analysis_service=service).dispatch(
+        "momentum analyze sunpharma"
+    )
+
+    assert service.symbol_calls == [("SUNPHARMA", False)]
+    assert "momentum: True" in response["text"]
+    assert "side: buy" in response["text"]
+    assert "Tracker updated." not in response["text"]
+
+
+def test_momentum_analyze_symbol_can_request_a_tracker_update() -> None:
+    service = FakeMomentumAnalysisService()
+    response = build_router(momentum_analysis_service=service).dispatch(
+        "momentum analyze sunpharma update tracker"
+    )
+
+    assert service.symbol_calls == [("SUNPHARMA", True)]
+    assert "Tracker updated." in response["text"]
+
+
+def test_momentum_analyze_symbol_reports_analysis_failure() -> None:
+    class FailingService:
+        def analyze_symbol(
+            self, trading_symbol: str, *, update_tracker: bool = False
+        ) -> SymbolMomentumAnalysis:
+            raise MomentumAnalysisError("Asset `MISSING` is not saved.")
+
+    response = build_router(momentum_analysis_service=FailingService()).dispatch(
+        "momentum analyze missing"
+    )
+
+    assert response == ephemeral(":warning: Asset `MISSING` is not saved.")
+
+
+def test_momentum_analyze_assets_screens_every_saved_asset() -> None:
+    service = FakeMomentumAnalysisService()
+    response = build_router(momentum_analysis_service=service).dispatch(
+        "momentum analyze assets"
+    )
+
+    assert service.assets_calls == [False]
+    assert "Momentum: 1" in response["text"]
+    assert "SUNPHARMA" in response["text"]
+    assert "FLAT" in response["text"]
+
+
+def test_momentum_analyze_assets_can_update_the_tracker() -> None:
+    service = FakeMomentumAnalysisService()
+    build_router(momentum_analysis_service=service).dispatch(
+        "momentum analyze assets update tracker"
+    )
+
+    assert service.assets_calls == [True]
+
+
+def test_momentum_analyze_tracker_rechecks_every_tracked_asset() -> None:
+    service = FakeMomentumAnalysisService()
+    response = build_router(momentum_analysis_service=service).dispatch(
+        "momentum analyze tracker"
+    )
+
+    assert service.tracker_calls == 1
+    assert "momentum: False" in response["text"]
+    assert "side: none" in response["text"]
+
+
+def test_momentum_analyze_requires_the_service_to_be_configured() -> None:
+    response = build_router().dispatch("momentum analyze sunpharma")
+
+    assert response == ephemeral("Momentum analysis is not configured.")
+
+
+def test_momentum_analyze_reports_usage_for_bad_arguments() -> None:
+    response = build_router(
+        momentum_analysis_service=FakeMomentumAnalysisService()
+    ).dispatch("momentum analyze")
+
+    assert "momentum analyze" in response["text"]
 
 
 def test_fundamental_list_file_runs_scan_and_requests_csv_upload(

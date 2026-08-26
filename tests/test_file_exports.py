@@ -94,6 +94,7 @@ def test_tracker_csv_contains_database_fields(tmp_path) -> None:
                 amount_allocated=12500.5,
                 added_date=date(2026, 7, 28),
                 has_fno=True,
+                side="buy",
             )
         ]
     )
@@ -112,6 +113,7 @@ def test_tracker_csv_contains_database_fields(tmp_path) -> None:
             "amount_allocated",
             "added_date",
             "has_fno",
+            "side",
         ],
         [
             "SUN PHARMACEUTICAL IND L",
@@ -122,6 +124,7 @@ def test_tracker_csv_contains_database_fields(tmp_path) -> None:
             "12500.5",
             "2026-07-28",
             "True",
+            "buy",
         ],
     ]
 

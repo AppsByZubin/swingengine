@@ -36,14 +36,32 @@ def settings() -> TrackerEvaluationSettings:
     return TrackerEvaluationSettings.from_env({})
 
 
-def test_indicator_calculation_matches_notebook_price_slope_angles() -> None:
-    indicators = calculate_momentum_indicators(
+def test_indicator_calculation_matches_notebook_momentum_ribbon() -> None:
+    rising = calculate_momentum_indicators(
         candles([100 + index * 20 for index in range(60)])
     )
+    assert rising.ema_5 > rising.ema_8 > rising.ema_13 > rising.ema_21
+    assert rising.has_up_momentum is True
 
-    assert indicators.ema_21 > indicators.sma_50
-    assert indicators.ema_21_angle > 84
-    assert indicators.sma_50_angle > 84
+    flat = calculate_momentum_indicators(candles([100.0] * 60))
+    assert flat.ema_5 == flat.ema_8 == flat.ema_13 == flat.ema_21
+    assert flat.has_up_momentum is False
+
+
+def test_indicator_side_reflects_the_ema_ribbon_direction() -> None:
+    rising = calculate_momentum_indicators(
+        candles([100 + index * 20 for index in range(60)])
+    )
+    assert rising.side == "buy"
+
+    falling = calculate_momentum_indicators(
+        candles([100 + (60 - index) * 20 for index in range(60)])
+    )
+    assert falling.has_down_momentum is True
+    assert falling.side == "sell"
+
+    flat = calculate_momentum_indicators(candles([100.0] * 60))
+    assert flat.side is None
 
 
 def test_evaluator_inserts_momentum_and_clears_pending_nonmomentum() -> None:

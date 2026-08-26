@@ -89,7 +89,7 @@ class AccessTokenStore(Protocol):
         """Load the current Upstox token state."""
 
 
-class NSEMomentumScanner:
+class NSEEmaRibbonScanner:
     """Refresh the NSE catalogue and screen all of its equity instruments."""
 
     def __init__(
@@ -146,14 +146,11 @@ class NSEMomentumScanner:
         historical_through_date = local_date - timedelta(days=1)
         LOGGER.info(
             "Starting NSE equity momentum scan local_date=%s from_date=%s "
-            "historical_through_date=%s ema_angle_threshold=%.2f "
-            "sma_angle_threshold=%.2f minimum_candles=%d "
+            "historical_through_date=%s minimum_candles=%d "
             "request_interval_seconds=%.3f",
             local_date,
             from_date,
             historical_through_date,
-            self.settings.ema_angle_threshold,
-            self.settings.sma_angle_threshold,
             self.settings.momentum_scan_minimum_candles,
             self.request_interval_seconds,
         )
@@ -433,12 +430,7 @@ class NSEMomentumScanner:
                     )
                     continue
                 indicators = calculate_momentum_indicators(candles)
-                has_momentum = (
-                    indicators.ema_21_angle
-                    > self.settings.ema_angle_threshold
-                    and indicators.sma_50_angle
-                    > self.settings.sma_angle_threshold
-                )
+                has_momentum = indicators.has_up_momentum
             except (IndicatorCalculationError, UpstoxAPIError, ValueError):
                 failed += 1
                 LOGGER.warning(
@@ -473,17 +465,17 @@ class NSEMomentumScanner:
             LOGGER.debug(
                 "Evaluated NSE equity momentum index=%d/%d "
                 "trading_symbol=%r instrument_key=%r ltp=%.4f "
-                "ema_21=%.4f sma_50=%.4f ema_21_angle=%.2f "
-                "sma_50_angle=%.2f has_momentum=%r",
+                "ema_5=%.4f ema_8=%.4f ema_13=%.4f ema_21=%.4f "
+                "has_momentum=%r",
                 index,
                 total,
                 asset.trading_symbol,
                 instrument_key,
                 quote.last_price,
+                indicators.ema_5,
+                indicators.ema_8,
+                indicators.ema_13,
                 indicators.ema_21,
-                indicators.sma_50,
-                indicators.ema_21_angle,
-                indicators.sma_50_angle,
                 has_momentum,
             )
             self._log_progress(

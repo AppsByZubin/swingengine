@@ -84,8 +84,6 @@ class TrackerEvaluationSettings:
     evaluation_time: time
     timezone_name: str
     lookback_days: int
-    ema_angle_threshold: float
-    sma_angle_threshold: float
     momentum_scan_lookback_days: int
     momentum_scan_minimum_candles: int
     momentum_scan_request_interval_seconds: float
@@ -136,18 +134,6 @@ class TrackerEvaluationSettings:
             200,
             errors,
         )
-        ema_angle_threshold = _parse_float(
-            values,
-            "SWINGENGINE_TRACKER_EMA_ANGLE_THRESHOLD",
-            70.0,
-            errors,
-        )
-        sma_angle_threshold = _parse_float(
-            values,
-            "SWINGENGINE_TRACKER_SMA_ANGLE_THRESHOLD",
-            50.0,
-            errors,
-        )
         momentum_scan_request_interval_seconds = _parse_positive_float(
             values,
             "SWINGENGINE_MOMENTUM_SCAN_REQUEST_INTERVAL_SECONDS",
@@ -191,8 +177,6 @@ class TrackerEvaluationSettings:
             evaluation_time=evaluation_time,
             timezone_name=timezone_name,
             lookback_days=lookback_days,
-            ema_angle_threshold=ema_angle_threshold,
-            sma_angle_threshold=sma_angle_threshold,
             momentum_scan_lookback_days=momentum_scan_lookback_days,
             momentum_scan_minimum_candles=momentum_scan_minimum_candles,
             momentum_scan_request_interval_seconds=(

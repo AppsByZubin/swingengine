@@ -7,7 +7,7 @@ import pytest
 from tracker.config import TrackerEvaluationSettings
 from tracker.momentum_scanner import (
     MomentumScanError,
-    NSEMomentumScanner,
+    NSEEmaRibbonScanner,
     _include_quote_candle,
 )
 from upstox.assets import AssetSearchResult
@@ -150,7 +150,7 @@ def test_scanner_refreshes_first_and_exports_only_momentum(
     events: list[str] = []
     sleep_calls: list[float] = []
     client = Client(events)
-    scanner = NSEMomentumScanner(
+    scanner = NSEEmaRibbonScanner(
         settings(),
         Catalog(events, [asset("RISING"), asset("FLAT")]),
         client,
@@ -189,7 +189,7 @@ def test_scanner_refreshes_first_and_exports_only_momentum(
 
 def test_scanner_logs_one_asset_failure_and_continues(caplog: Any) -> None:
     events: list[str] = []
-    scanner = NSEMomentumScanner(
+    scanner = NSEEmaRibbonScanner(
         settings(),
         Catalog(events, [asset("BAD"), asset("RISING")]),
         Client(events),
@@ -212,7 +212,7 @@ def test_scanner_logs_one_asset_failure_and_continues(caplog: Any) -> None:
 
 def test_scanner_refreshes_before_rejecting_an_invalid_token() -> None:
     events: list[str] = []
-    scanner = NSEMomentumScanner(
+    scanner = NSEEmaRibbonScanner(
         settings(),
         Catalog(events, [asset("RISING")]),
         Client(events),
@@ -230,7 +230,7 @@ def test_scanner_marks_assets_below_200_candles_as_ineligible(
     caplog: Any,
 ) -> None:
     events: list[str] = []
-    scanner = NSEMomentumScanner(
+    scanner = NSEEmaRibbonScanner(
         settings(),
         Catalog(events, [asset("SHORT")]),
         Client(events),
@@ -255,7 +255,7 @@ def test_scanner_marks_assets_below_200_candles_as_ineligible(
 
 def test_scanner_uses_configured_minimum_candle_count(caplog: Any) -> None:
     events: list[str] = []
-    scanner = NSEMomentumScanner(
+    scanner = NSEEmaRibbonScanner(
         settings({"SWINGENGINE_MOMENTUM_SCAN_MINIMUM_CANDLES": "100"}),
         Catalog(events, [asset("SHORT")]),
         Client(events),
@@ -285,7 +285,7 @@ def test_scanner_fails_when_no_market_quote_batch_succeeds() -> None:
         ) -> dict[str, DailyMarketQuote]:
             raise UpstoxAPIError("quote request failed", 500)
 
-    scanner = NSEMomentumScanner(
+    scanner = NSEEmaRibbonScanner(
         settings(),
         Catalog(events, [asset("RISING")]),
         FailingQuoteClient(events),

@@ -36,7 +36,8 @@ from slack.file_imports import (
 from slack.notifier import SlackTokenNotifier
 from tracker.config import TrackerEvaluationSettings
 from tracker.evaluator import TrackerMomentumEvaluator
-from tracker.momentum_scanner import NSEMomentumScanner
+from tracker.momentum_analysis import MomentumAnalyzer
+from tracker.momentum_scanner import NSEEmaRibbonScanner
 from tracker.scheduler import TrackerEvaluationScheduler
 from upstox.assets import AssetCatalog, AssetCatalogSettings
 from upstox.client import UpstoxAuthClient
@@ -635,9 +636,15 @@ def run() -> None:
         auth_client,
         token_store,
     )
-    momentum_scanner = NSEMomentumScanner(
+    momentum_scanner = NSEEmaRibbonScanner(
         tracker_evaluation_settings,
         asset_catalog,
+        auth_client,
+        token_store,
+    )
+    momentum_analyzer = MomentumAnalyzer(
+        tracker_evaluation_settings,
+        asset_tracker_repository,
         auth_client,
         token_store,
     )
@@ -672,6 +679,7 @@ def run() -> None:
             file_exporter=file_exporter,
             evaluation_service=tracker_evaluator,
             momentum_service=momentum_scanner,
+            momentum_analysis_service=momentum_analyzer,
             fundamental_service=fundamental_scanner,
             fundamental_analysis_service=fundamental_analyzer,
         ),

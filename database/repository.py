@@ -59,6 +59,7 @@ class TrackerEntry:
     amount_allocated: float
     added_date: date
     has_fno: bool = False
+    side: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,7 +199,8 @@ class AssetTrackerRepository:
                         is_approved_for_trade,
                         amount_allocated,
                         added_date,
-                        has_fno
+                        has_fno,
+                        side
                     """,
                     (trading_symbol,),
                 ).fetchone()
@@ -253,6 +255,7 @@ class AssetTrackerRepository:
             amount_allocated=float(row[5]),
             added_date=row[6],
             has_fno=bool(row[7]),
+            side=None if row[8] is None else str(row[8]),
         )
 
     def delete_tracker(self, trading_symbol: str) -> TrackerEntry:
@@ -274,7 +277,8 @@ class AssetTrackerRepository:
                         tracker.is_approved_for_trade,
                         tracker.amount_allocated,
                         tracker.added_date,
-                        tracker.has_fno
+                        tracker.has_fno,
+                        tracker.side
                     """,
                     (trading_symbol,),
                 ).fetchone()
@@ -306,7 +310,8 @@ class AssetTrackerRepository:
                         tracker.is_approved_for_trade,
                         tracker.amount_allocated,
                         tracker.added_date,
-                        tracker.has_fno
+                        tracker.has_fno,
+                        tracker.side
                     FROM public.tracker AS tracker
                     JOIN public.assets AS asset
                       ON asset.asset_id = tracker.asset_id
@@ -346,7 +351,8 @@ class AssetTrackerRepository:
                         tracker.is_approved_for_trade,
                         tracker.amount_allocated,
                         tracker.added_date,
-                        tracker.has_fno
+                        tracker.has_fno,
+                        tracker.side
                     """,
                     (
                         is_approved_for_trade,
@@ -399,12 +405,14 @@ class AssetTrackerRepository:
         asset_id: int,
         has_momentum: bool,
         evaluation_date: date,
+        side: str | None = None,
     ) -> bool:
         """Apply one evaluation without changing trade-created tracker rows.
 
         Qualifying untracked assets are inserted. Qualifying pending entries
         are refreshed and reset to unapproved. Pending entries that no longer
-        qualify have their momentum and approval flags cleared.
+        qualify have their momentum and approval flags cleared and their
+        side reset to NULL regardless of the supplied ``side``.
         """
         try:
             with self._connection() as connection:
@@ -417,9 +425,10 @@ class AssetTrackerRepository:
                             is_trade_created,
                             is_approved_for_trade,
                             added_date,
-                            has_fno
+                            has_fno,
+                            side
                         )
-                        SELECT %s, TRUE, FALSE, FALSE, %s, has_fno
+                        SELECT %s, TRUE, FALSE, FALSE, %s, has_fno, %s
                         FROM public.assets
                         WHERE asset_id = %s
                         ON CONFLICT (asset_id) DO UPDATE
@@ -428,11 +437,12 @@ class AssetTrackerRepository:
                             is_trade_created = FALSE,
                             is_approved_for_trade = FALSE,
                             added_date = EXCLUDED.added_date,
-                            has_fno = EXCLUDED.has_fno
+                            has_fno = EXCLUDED.has_fno,
+                            side = EXCLUDED.side
                         WHERE current_tracker.is_trade_created = FALSE
                         RETURNING tracker_details_id
                         """,
-                        (asset_id, evaluation_date, asset_id),
+                        (asset_id, evaluation_date, side, asset_id),
                     ).fetchone()
                 else:
                     row = connection.execute(
@@ -440,7 +450,8 @@ class AssetTrackerRepository:
                         UPDATE public.tracker
                         SET
                             has_momentum = FALSE,
-                            is_approved_for_trade = FALSE
+                            is_approved_for_trade = FALSE,
+                            side = NULL
                         WHERE asset_id = %s
                           AND is_trade_created = FALSE
                         RETURNING tracker_details_id
@@ -456,6 +467,58 @@ class AssetTrackerRepository:
                 "Unable to update tracker momentum."
             ) from error
         return row is not None
+
+    def find_asset_by_trading_symbol(
+        self, trading_symbol: str
+    ) -> AssetRecord | None:
+        """Return one saved asset by trading symbol, or None if unsaved."""
+        try:
+            with self._connection() as connection:
+                row = connection.execute(
+                    """
+                    SELECT
+                        asset_id,
+                        asset_name,
+                        trading_symbol,
+                        instrument_key,
+                        has_fno
+                    FROM public.assets
+                    WHERE upper(trading_symbol) = upper(%s)
+                    """,
+                    (trading_symbol,),
+                ).fetchone()
+        except psycopg.Error as error:
+            LOGGER.exception(
+                "Failed to look up asset trading_symbol=%r",
+                trading_symbol,
+            )
+            raise RepositoryError("Unable to look up the asset.") from error
+        return None if row is None else _asset_record(row)
+
+    def list_tracker_assets(self) -> list[MomentumCandidate]:
+        """List every currently tracked asset with its instrument key."""
+        try:
+            with self._connection() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT
+                        asset.asset_id,
+                        asset.asset_name,
+                        asset.trading_symbol,
+                        asset.instrument_key,
+                        tracker.tracker_details_id
+                    FROM public.tracker AS tracker
+                    JOIN public.assets AS asset
+                      ON asset.asset_id = tracker.asset_id
+                    ORDER BY asset.trading_symbol, asset.asset_id
+                    """
+                ).fetchall()
+        except psycopg.Error as error:
+            LOGGER.exception("Failed to list tracker assets")
+            raise RepositoryError(
+                "Unable to list tracker assets."
+            ) from error
+        return [_momentum_candidate(row) for row in rows]
 
     def _connection(self) -> Any:
         return self._connect(
@@ -486,6 +549,7 @@ def _tracker_entry(row: tuple[Any, ...]) -> TrackerEntry:
         amount_allocated=float(row[7]),
         added_date=row[8],
         has_fno=bool(row[9]),
+        side=None if row[10] is None else str(row[10]),
     )
 
 

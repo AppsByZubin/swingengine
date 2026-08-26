@@ -151,8 +151,8 @@ instrument catalogue:
 
 The command refreshes `NSE.json` first, selects rows where `segment = NSE_EQ`
 and `instrument_type = EQ`, and obtains the current daily OHLC/LTP in batches.
-It then requests daily history for each equity and applies the same EMA-21 and
-SMA-50 angle thresholds as the tracker evaluator. The scanner requests 365
+It then requests daily history for each equity and applies the same EMA
+ribbon momentum test as the tracker evaluator. The scanner requests 365
 calendar days and, by default, evaluates only assets with 200 or more daily
 candles. The minimum is configurable. The current daily quote is included only
 when it represents a newer trading session than the historical candles, so
@@ -248,15 +248,13 @@ that is not yet tracked and every tracked asset where
 daily Upstox candles and combines the V3 historical response with the V3
 intraday daily candle so the current trading day is included.
 
-The calculation matches
-`visualizer/notebooks/swingengine/ema_crossover.ipynb`: EMA 21 uses
-`adjust=False`, SMA 50 is a rolling mean, and each angle is the arctangent of
-the average price-point slope over three bars, clipped to `[-10, 10]`.
-Momentum requires both strict conditions:
+The calculation matches the momentum ribbon in
+`visualizer/notebooks/swingengine/ema_ribbon.ipynb`: EMA 5, 8, 13, and 21 of
+daily closes, each using `adjust=False`. Momentum requires the ribbon to be
+fully stacked from fastest to slowest:
 
 ```text
-ema_21_angle > 70
-sma_50_angle > 50
+ema_5 > ema_8 > ema_13 > ema_21
 ```
 
 A qualifying untracked asset is inserted into `tracker`. A qualifying pending
@@ -278,8 +276,6 @@ export SWINGENGINE_TRACKER_EVALUATION_ENABLED=true
 export SWINGENGINE_TRACKER_EVALUATION_TIME=16:00
 export SWINGENGINE_TRACKER_EVALUATION_TIMEZONE=Asia/Kolkata
 export SWINGENGINE_TRACKER_EVALUATION_LOOKBACK_DAYS=200
-export SWINGENGINE_TRACKER_EMA_ANGLE_THRESHOLD=70
-export SWINGENGINE_TRACKER_SMA_ANGLE_THRESHOLD=50
 export SWINGENGINE_MOMENTUM_SCAN_LOOKBACK_DAYS=365
 export SWINGENGINE_MOMENTUM_SCAN_MINIMUM_CANDLES=200
 export SWINGENGINE_MOMENTUM_SCAN_REQUEST_INTERVAL_SECONDS=1.0

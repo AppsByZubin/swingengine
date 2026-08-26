@@ -1,0 +1,291 @@
+"""On-demand momentum analysis for one symbol, saved assets, or the tracker."""
+
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
+import logging
+from typing import Protocol
+from zoneinfo import ZoneInfo
+
+from database.repository import AssetRecord, MomentumCandidate, RepositoryError
+from tracker.config import TrackerEvaluationSettings
+from tracker.evaluator import IndicatorCalculationError, calculate_momentum_indicators
+from upstox.client import DailyCandle, UpstoxAPIError
+from upstox.store import TokenState, TokenStateError
+
+LOGGER = logging.getLogger(__name__)
+
+
+class MomentumAnalysisError(RuntimeError):
+    """Raised when an on-demand momentum analysis request cannot be completed."""
+
+
+class MomentumAnalysisRepository(Protocol):
+    def find_asset_by_trading_symbol(
+        self, trading_symbol: str
+    ) -> AssetRecord | None:
+        """Return one saved asset by trading symbol, or None if unsaved."""
+
+    def list_assets(self) -> list[AssetRecord]:
+        """Return every saved asset."""
+
+    def list_tracker_assets(self) -> list[MomentumCandidate]:
+        """Return every currently tracked asset with its instrument key."""
+
+    def record_momentum_evaluation(
+        self,
+        asset_id: int,
+        has_momentum: bool,
+        evaluation_date: date,
+        side: str | None = None,
+    ) -> bool:
+        """Insert or update eligible tracker state and report persistence."""
+
+
+class DailyCandleClient(Protocol):
+    def get_daily_candles(
+        self,
+        access_token: str,
+        instrument_key: str,
+        from_date: date,
+        through_date: date,
+    ) -> list[DailyCandle]:
+        """Return historical candles plus the current trading day."""
+
+
+class AccessTokenStore(Protocol):
+    def load(self) -> TokenState:
+        """Load the current token state."""
+
+
+@dataclass(frozen=True, slots=True)
+class SymbolMomentumAnalysis:
+    """The momentum screen outcome for one saved asset."""
+
+    asset_id: int
+    asset_name: str
+    trading_symbol: str
+    has_momentum: bool
+    side: str | None
+    tracker_updated: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class MomentumAnalysisBatch:
+    """Aggregate outcome from screening multiple saved assets."""
+
+    results: tuple[SymbolMomentumAnalysis, ...]
+    failed: int = 0
+
+
+class MomentumAnalyzer:
+    """Screen saved assets and tracker entries for momentum on demand."""
+
+    def __init__(
+        self,
+        settings: TrackerEvaluationSettings,
+        repository: MomentumAnalysisRepository,
+        candle_client: DailyCandleClient,
+        token_store: AccessTokenStore,
+    ):
+        self.settings = settings
+        self.repository = repository
+        self.candle_client = candle_client
+        self.token_store = token_store
+
+    def analyze_symbol(
+        self,
+        trading_symbol: str,
+        *,
+        update_tracker: bool = False,
+        now: datetime | None = None,
+    ) -> SymbolMomentumAnalysis:
+        """Analyze one saved asset's trading symbol for momentum."""
+        normalized = trading_symbol.strip().upper()
+        if not normalized:
+            raise MomentumAnalysisError("Provide a trading symbol.")
+        try:
+            asset = self.repository.find_asset_by_trading_symbol(normalized)
+        except RepositoryError as error:
+            raise MomentumAnalysisError(str(error)) from error
+        if asset is None:
+            raise MomentumAnalysisError(
+                f"Asset `{normalized}` is not saved. Add it first with "
+                "`/swingengine asset add <trading_symbol>`."
+            )
+        if not asset.instrument_key:
+            raise MomentumAnalysisError(
+                f"Asset `{normalized}` has no instrument key."
+            )
+
+        access_token, local_date = self._valid_token_and_date(now)
+        result = self._analyze_one(
+            asset.asset_id,
+            asset.asset_name,
+            asset.trading_symbol,
+            asset.instrument_key,
+            access_token,
+            local_date,
+            update_tracker=update_tracker,
+        )
+        if result is None:
+            raise MomentumAnalysisError(
+                f"Unable to analyze `{normalized}`: not enough daily candles."
+            )
+        return result
+
+    def analyze_assets(
+        self,
+        *,
+        update_tracker: bool = False,
+        now: datetime | None = None,
+    ) -> MomentumAnalysisBatch:
+        """Analyze every saved asset for momentum."""
+        try:
+            assets = self.repository.list_assets()
+        except RepositoryError as error:
+            raise MomentumAnalysisError(str(error)) from error
+        access_token, local_date = self._valid_token_and_date(now)
+        return self._analyze_many(
+            (
+                (
+                    asset.asset_id,
+                    asset.asset_name,
+                    asset.trading_symbol,
+                    asset.instrument_key,
+                )
+                for asset in assets
+            ),
+            access_token,
+            local_date,
+            update_tracker=update_tracker,
+        )
+
+    def analyze_tracker(
+        self, *, now: datetime | None = None
+    ) -> MomentumAnalysisBatch:
+        """Re-check every tracked asset and clear momentum/side that lapsed."""
+        try:
+            candidates = self.repository.list_tracker_assets()
+        except RepositoryError as error:
+            raise MomentumAnalysisError(str(error)) from error
+        access_token, local_date = self._valid_token_and_date(now)
+        return self._analyze_many(
+            (
+                (
+                    candidate.asset_id,
+                    candidate.asset_name,
+                    candidate.trading_symbol,
+                    candidate.instrument_key,
+                )
+                for candidate in candidates
+            ),
+            access_token,
+            local_date,
+            update_tracker=True,
+        )
+
+    def _analyze_many(
+        self,
+        assets: Iterable[tuple[int, str, str, str | None]],
+        access_token: str,
+        local_date: date,
+        *,
+        update_tracker: bool,
+    ) -> MomentumAnalysisBatch:
+        results: list[SymbolMomentumAnalysis] = []
+        failed = 0
+        for asset_id, asset_name, trading_symbol, instrument_key in assets:
+            if not instrument_key:
+                failed += 1
+                LOGGER.warning(
+                    "Skipping momentum analysis without instrument key "
+                    "trading_symbol=%r",
+                    trading_symbol,
+                )
+                continue
+            result = self._analyze_one(
+                asset_id,
+                asset_name,
+                trading_symbol,
+                instrument_key,
+                access_token,
+                local_date,
+                update_tracker=update_tracker,
+            )
+            if result is None:
+                failed += 1
+                continue
+            results.append(result)
+        return MomentumAnalysisBatch(results=tuple(results), failed=failed)
+
+    def _analyze_one(
+        self,
+        asset_id: int,
+        asset_name: str,
+        trading_symbol: str,
+        instrument_key: str,
+        access_token: str,
+        local_date: date,
+        *,
+        update_tracker: bool,
+    ) -> SymbolMomentumAnalysis | None:
+        from_date = local_date - timedelta(
+            days=self.settings.lookback_days - 1
+        )
+        try:
+            candles = self.candle_client.get_daily_candles(
+                access_token, instrument_key, from_date, local_date
+            )
+            indicators = calculate_momentum_indicators(candles)
+        except (IndicatorCalculationError, UpstoxAPIError) as error:
+            LOGGER.warning(
+                "Momentum analysis failed trading_symbol=%r: %s",
+                trading_symbol,
+                error,
+            )
+            return None
+
+        has_momentum = indicators.side is not None
+        tracker_updated = False
+        if update_tracker:
+            try:
+                tracker_updated = self.repository.record_momentum_evaluation(
+                    asset_id, has_momentum, local_date, indicators.side
+                )
+            except RepositoryError as error:
+                LOGGER.warning(
+                    "Failed to update tracker trading_symbol=%r: %s",
+                    trading_symbol,
+                    error,
+                )
+                return None
+
+        return SymbolMomentumAnalysis(
+            asset_id=asset_id,
+            asset_name=asset_name,
+            trading_symbol=trading_symbol,
+            has_momentum=has_momentum,
+            side=indicators.side,
+            tracker_updated=tracker_updated,
+        )
+
+    def _valid_token_and_date(
+        self, now: datetime | None
+    ) -> tuple[str, date]:
+        current = now or datetime.now(UTC)
+        local_date = current.astimezone(
+            ZoneInfo(self.settings.timezone_name)
+        ).date()
+        try:
+            token_state = self.token_store.load()
+        except TokenStateError as error:
+            raise MomentumAnalysisError(
+                "Upstox token state cannot be read."
+            ) from error
+        if not token_state.is_valid(current):
+            raise MomentumAnalysisError(
+                "A valid Upstox token is required. Use "
+                "`/swingengine auth set <token>`."
+            )
+        return token_state.access_token, local_date

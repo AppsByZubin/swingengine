@@ -136,6 +136,7 @@ class CsvFileExporter:
                 "amount_allocated",
                 "added_date",
                 "has_fno",
+                "side",
             ),
             (
                 (
@@ -147,6 +148,7 @@ class CsvFileExporter:
                     entry.amount_allocated,
                     entry.added_date.isoformat(),
                     entry.has_fno,
+                    entry.side or "",
                 )
                 for entry in entries
             ),

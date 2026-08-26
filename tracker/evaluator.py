@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 import logging
-from math import atan, degrees, isfinite
+from math import isfinite
 from threading import Lock
 from typing import Protocol
 from zoneinfo import ZoneInfo
@@ -19,10 +19,8 @@ from upstox.store import TokenState, TokenStateError
 
 LOGGER = logging.getLogger(__name__)
 
-EMA_PERIOD = 21
-SMA_PERIOD = 50
-ANGLE_LOOKBACK = 3
-MINIMUM_CANDLES = SMA_PERIOD + ANGLE_LOOKBACK
+MOMENTUM_PERIODS = (5, 8, 13, 21)
+MINIMUM_CANDLES = max(MOMENTUM_PERIODS)
 
 
 class MomentumRepository(Protocol):
@@ -60,10 +58,29 @@ class IndicatorCalculationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class MomentumIndicators:
+    ema_5: float
+    ema_8: float
+    ema_13: float
     ema_21: float
-    sma_50: float
-    ema_21_angle: float
-    sma_50_angle: float
+
+    @property
+    def has_up_momentum(self) -> bool:
+        """EMA ribbon momentum: fastest to slowest EMA fully stacked up."""
+        return self.ema_5 > self.ema_8 > self.ema_13 > self.ema_21
+
+    @property
+    def has_down_momentum(self) -> bool:
+        """EMA ribbon momentum: fastest to slowest EMA fully stacked down."""
+        return self.ema_5 < self.ema_8 < self.ema_13 < self.ema_21
+
+    @property
+    def side(self) -> str | None:
+        """The tracker side implied by the EMA ribbon, if any."""
+        if self.has_up_momentum:
+            return "buy"
+        if self.has_down_momentum:
+            return "sell"
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,12 +171,7 @@ class TrackerMomentumEvaluator:
                         local_date,
                     )
                     indicators = calculate_momentum_indicators(candles)
-                    has_momentum = (
-                        indicators.ema_21_angle
-                        > self.settings.ema_angle_threshold
-                        and indicators.sma_50_angle
-                        > self.settings.sma_angle_threshold
-                    )
+                    has_momentum = indicators.has_up_momentum
                     persisted = self.repository.record_momentum_evaluation(
                         candidate.asset_id,
                         has_momentum,
@@ -192,13 +204,13 @@ class TrackerMomentumEvaluator:
 
                 LOGGER.info(
                     "Evaluated tracker momentum trading_symbol=%r "
-                    "ema_21=%.4f sma_50=%.4f ema_21_angle=%.2f "
-                    "sma_50_angle=%.2f has_momentum=%r",
+                    "ema_5=%.4f ema_8=%.4f ema_13=%.4f ema_21=%.4f "
+                    "has_momentum=%r",
                     candidate.trading_symbol,
+                    indicators.ema_5,
+                    indicators.ema_8,
+                    indicators.ema_13,
                     indicators.ema_21,
-                    indicators.sma_50,
-                    indicators.ema_21_angle,
-                    indicators.sma_50_angle,
                     has_momentum,
                 )
 
@@ -229,7 +241,7 @@ class TrackerMomentumEvaluator:
 def calculate_momentum_indicators(
     candles: Sequence[DailyCandle],
 ) -> MomentumIndicators:
-    """Match the notebook's EMA, SMA, and three-bar price-slope angles."""
+    """Match the notebook's momentum ribbon: EMA 5/8/13/21 of daily closes."""
     closes = [float(candle.close) for candle in candles]
     if len(closes) < MINIMUM_CANDLES:
         raise IndicatorCalculationError(
@@ -238,29 +250,18 @@ def calculate_momentum_indicators(
     if not all(isfinite(close) for close in closes):
         raise IndicatorCalculationError("Daily candles contain invalid closes")
 
-    alpha = 2.0 / (EMA_PERIOD + 1.0)
-    ema_values: list[float] = []
-    ema = closes[0]
-    for close in closes:
-        ema = alpha * close + (1.0 - alpha) * ema
-        ema_values.append(ema)
-
-    sma_values = [
-        sum(closes[index - SMA_PERIOD + 1 : index + 1]) / SMA_PERIOD
-        for index in range(SMA_PERIOD - 1, len(closes))
-    ]
-    ema_21 = ema_values[-1]
-    sma_50 = sma_values[-1]
-    ema_21_angle = _angle(ema_21, ema_values[-1 - ANGLE_LOOKBACK])
-    sma_50_angle = _angle(sma_50, sma_values[-1 - ANGLE_LOOKBACK])
+    emas = {period: _ema(closes, period) for period in MOMENTUM_PERIODS}
     return MomentumIndicators(
-        ema_21=ema_21,
-        sma_50=sma_50,
-        ema_21_angle=ema_21_angle,
-        sma_50_angle=sma_50_angle,
+        ema_5=emas[5],
+        ema_8=emas[8],
+        ema_13=emas[13],
+        ema_21=emas[21],
     )
 
 
-def _angle(current: float, previous: float) -> float:
-    slope = (current - previous) / ANGLE_LOOKBACK
-    return degrees(atan(max(-10.0, min(10.0, slope))))
+def _ema(closes: Sequence[float], period: int) -> float:
+    alpha = 2.0 / (period + 1.0)
+    ema = closes[0]
+    for close in closes:
+        ema = alpha * close + (1.0 - alpha) * ema
+    return ema

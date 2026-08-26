@@ -187,11 +187,14 @@ CREATE TABLE IF NOT EXISTS public.tracker (
     amount_allocated DOUBLE PRECISION NOT NULL DEFAULT 0,
     added_date DATE NOT NULL DEFAULT CURRENT_DATE,
     has_fno BOOLEAN NOT NULL DEFAULT FALSE,
+    side TEXT,
     CONSTRAINT tracker_asset_fk
         FOREIGN KEY (asset_id)
         REFERENCES public.assets (asset_id),
     CONSTRAINT tracker_amount_allocated_nonnegative
-        CHECK (amount_allocated >= 0)
+        CHECK (amount_allocated >= 0),
+    CONSTRAINT tracker_side_valid_values
+        CHECK (side IS NULL OR side IN ('buy', 'sell'))
 );
 
 ALTER TABLE public.tracker
@@ -199,6 +202,24 @@ ALTER TABLE public.tracker
         DATE NOT NULL DEFAULT CURRENT_DATE;
 ALTER TABLE public.tracker
     ADD COLUMN IF NOT EXISTS has_fno BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE public.tracker
+    ADD COLUMN IF NOT EXISTS side TEXT;
+
+-- CREATE TABLE IF NOT EXISTS does not add constraints during an upgrade.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'public.tracker'::regclass
+          AND conname = 'tracker_side_valid_values'
+    ) THEN
+        ALTER TABLE public.tracker
+            ADD CONSTRAINT tracker_side_valid_values
+            CHECK (side IS NULL OR side IN ('buy', 'sell'));
+    END IF;
+END
+$$;
 
 -- Commands address both tables by trading symbol, so keep symbols and tracker
 -- membership unambiguous.
