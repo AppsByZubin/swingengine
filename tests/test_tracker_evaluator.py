@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime, timedelta, timezone
+from math import sin
 
 from database.repository import MomentumCandidate
 from tracker.config import TrackerEvaluationSettings
@@ -10,6 +11,28 @@ from upstox.client import DailyCandle
 from upstox.store import TokenState
 
 IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def regime_closes(
+    direction: int, base_bars: int = 140, rally_bars: int = 20
+) -> list[float]:
+    """A flat/noisy base followed by a sustained rally.
+
+    A smooth monotonic ramp pins ADX(8) at 100 (never "rising"), so the base
+    needs some noise and the rally needs to be recent enough that ADX is
+    still climbing through the 30 threshold rather than already saturated.
+    """
+    closes = [100 + 3.0 * sin(index * 0.9) for index in range(base_bars)]
+    close = closes[-1]
+    for _ in range(rally_bars):
+        close *= 1 + direction * 0.02
+        closes.append(close)
+    return closes
+
+
+RISING = regime_closes(1)
+FALLING = regime_closes(-1)
+FLAT = [100.0] * len(RISING)
 
 
 def candles(closes: list[float]) -> list[DailyCandle]:
@@ -37,31 +60,87 @@ def settings() -> TrackerEvaluationSettings:
 
 
 def test_indicator_calculation_matches_notebook_momentum_ribbon() -> None:
-    rising = calculate_momentum_indicators(
-        candles([100 + index * 20 for index in range(60)])
-    )
+    rising = calculate_momentum_indicators(candles(RISING))
     assert rising.ema_5 > rising.ema_8 > rising.ema_13 > rising.ema_21
     assert rising.has_up_momentum is True
 
-    flat = calculate_momentum_indicators(candles([100.0] * 60))
+    flat = calculate_momentum_indicators(candles(FLAT))
     assert flat.ema_5 == flat.ema_8 == flat.ema_13 == flat.ema_21
     assert flat.has_up_momentum is False
 
 
 def test_indicator_side_reflects_the_ema_ribbon_direction() -> None:
-    rising = calculate_momentum_indicators(
-        candles([100 + index * 20 for index in range(60)])
-    )
+    rising = calculate_momentum_indicators(candles(RISING))
     assert rising.side == "buy"
 
-    falling = calculate_momentum_indicators(
-        candles([100 + (60 - index) * 20 for index in range(60)])
-    )
+    falling = calculate_momentum_indicators(candles(FALLING))
     assert falling.has_down_momentum is True
     assert falling.side == "sell"
 
-    flat = calculate_momentum_indicators(candles([100.0] * 60))
+    flat = calculate_momentum_indicators(candles(FLAT))
     assert flat.side is None
+
+
+def test_shallow_ema_21_angle_disqualifies_a_stacked_ribbon() -> None:
+    shallow_rise = calculate_momentum_indicators(
+        candles([100 + index * 20 for index in range(199)])
+    )
+    assert (
+        shallow_rise.ema_5
+        > shallow_rise.ema_8
+        > shallow_rise.ema_13
+        > shallow_rise.ema_21
+    )
+    assert shallow_rise.angle_ema_21 <= 40
+    assert shallow_rise.has_up_momentum is False
+    assert shallow_rise.side is None
+
+
+def test_price_below_the_ema_144_band_disqualifies_a_steep_ribbon() -> None:
+    # A rebound off a much higher base: fast EMAs already stack up and slope
+    # steeply, but the slow EMA 144 trend band hasn't caught down yet, so the
+    # rebound is still trading underneath it.
+    decline_pct = (100 / 150) ** (1 / 150) - 1
+    closes = []
+    price = 150.0
+    for index in range(150):
+        price *= 1 + decline_pct
+        closes.append(price)
+    for _ in range(10):
+        price *= 1.02
+        closes.append(price)
+
+    rebound = calculate_momentum_indicators(candles(closes))
+    assert (
+        rebound.ema_5 > rebound.ema_8 > rebound.ema_13 > rebound.ema_21
+    )
+    assert rebound.angle_ema_21 > 40
+    assert rebound.adx_8 > 30
+    assert rebound.adx_8_rising is True
+    assert rebound.ema_21 < rebound.ema_144_high
+    assert rebound.has_up_momentum is False
+    assert rebound.side is None
+
+
+def test_weak_adx_disqualifies_a_steep_ribbon_above_the_trend_band() -> None:
+    # A brand-new spike: only two rally bars is enough for the fast EMAs to
+    # stack up and clear the trend band, but ADX(8) hasn't built up enough
+    # directional strength yet to confirm the move.
+    closes = [100 + 3.0 * sin(index * 0.9) for index in range(146)]
+    price = closes[-1]
+    for _ in range(2):
+        price *= 1.08
+        closes.append(price)
+
+    spike = calculate_momentum_indicators(candles(closes))
+    assert spike.ema_5 > spike.ema_8 > spike.ema_13 > spike.ema_21
+    assert spike.angle_ema_21 > 40
+    assert spike.ema_21 > spike.ema_144_high
+    assert spike.latest_open > spike.ema_144_high
+    assert spike.latest_close > spike.ema_144_high
+    assert spike.adx_8 <= 30
+    assert spike.has_up_momentum is False
+    assert spike.side is None
 
 
 def test_evaluator_inserts_momentum_and_clears_pending_nonmomentum() -> None:
@@ -112,8 +191,8 @@ def test_evaluator_inserts_momentum_and_clears_pending_nonmomentum() -> None:
             assert access_token == "token"
             self.ranges.append((from_date, through_date))
             if instrument_key.endswith("RISING"):
-                return candles([100 + index * 20 for index in range(60)])
-            return candles([100.0] * 60)
+                return candles(RISING)
+            return candles(FLAT)
 
     class Store:
         def load(self) -> TokenState:
@@ -145,8 +224,8 @@ def test_evaluator_inserts_momentum_and_clears_pending_nonmomentum() -> None:
         (43, False, date(2026, 7, 30)),
     ]
     assert client.ranges == [
-        (date(2026, 1, 12), date(2026, 7, 30)),
-        (date(2026, 1, 12), date(2026, 7, 30)),
+        (date(2025, 10, 4), date(2026, 7, 30)),
+        (date(2025, 10, 4), date(2026, 7, 30)),
     ]
 
 

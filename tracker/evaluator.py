@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 import logging
-from math import isfinite
+from math import atan, degrees, isfinite
 from threading import Lock
 from typing import Protocol
 from zoneinfo import ZoneInfo
@@ -20,7 +20,11 @@ from upstox.store import TokenState, TokenStateError
 LOGGER = logging.getLogger(__name__)
 
 MOMENTUM_PERIODS = (5, 8, 13, 21)
-MINIMUM_CANDLES = max(MOMENTUM_PERIODS)
+TREND_PERIOD = 144
+ADX_PERIOD = 8
+ADX_THRESHOLD = 30.0
+MOMENTUM_ANGLE_THRESHOLD_DEGREES = 40.0
+MINIMUM_CANDLES = TREND_PERIOD + 2
 
 
 class MomentumRepository(Protocol):
@@ -62,16 +66,43 @@ class MomentumIndicators:
     ema_8: float
     ema_13: float
     ema_21: float
+    angle_ema_21: float
+    angle_threshold_degrees: float
+    ema_144_high: float
+    ema_144_close: float
+    ema_144_low: float
+    adx_8: float
+    adx_8_rising: bool
+    latest_open: float
+    latest_close: float
 
     @property
     def has_up_momentum(self) -> bool:
-        """EMA ribbon momentum: fastest to slowest EMA fully stacked up."""
-        return self.ema_5 > self.ema_8 > self.ema_13 > self.ema_21
+        """Notebook's bullish regime: ADX-confirmed ribbon stacked up, EMA 21
+        rising steeply enough, and the candle body above the EMA 144 band."""
+        return (
+            self.adx_8 > ADX_THRESHOLD
+            and self.adx_8_rising
+            and self.ema_5 > self.ema_8 > self.ema_13 > self.ema_21
+            and self.angle_ema_21 > self.angle_threshold_degrees
+            and self.ema_21 > self.ema_144_high
+            and self.latest_open > self.ema_144_high
+            and self.latest_close > self.ema_144_high
+        )
 
     @property
     def has_down_momentum(self) -> bool:
-        """EMA ribbon momentum: fastest to slowest EMA fully stacked down."""
-        return self.ema_5 < self.ema_8 < self.ema_13 < self.ema_21
+        """Notebook's bearish regime: ADX-confirmed ribbon stacked down, EMA
+        21 falling steeply enough, and the candle body below the EMA 144 band."""
+        return (
+            self.adx_8 > ADX_THRESHOLD
+            and self.adx_8_rising
+            and self.ema_5 < self.ema_8 < self.ema_13 < self.ema_21
+            and self.angle_ema_21 < -self.angle_threshold_degrees
+            and self.ema_21 < self.ema_144_low
+            and self.latest_open < self.ema_144_low
+            and self.latest_close < self.ema_144_low
+        )
 
     @property
     def side(self) -> str | None:
@@ -170,7 +201,12 @@ class TrackerMomentumEvaluator:
                         from_date,
                         local_date,
                     )
-                    indicators = calculate_momentum_indicators(candles)
+                    indicators = calculate_momentum_indicators(
+                        candles,
+                        angle_threshold_degrees=(
+                            self.settings.momentum_angle_threshold_degrees
+                        ),
+                    )
                     has_momentum = indicators.has_up_momentum
                     persisted = self.repository.record_momentum_evaluation(
                         candidate.asset_id,
@@ -205,12 +241,18 @@ class TrackerMomentumEvaluator:
                 LOGGER.info(
                     "Evaluated tracker momentum trading_symbol=%r "
                     "ema_5=%.4f ema_8=%.4f ema_13=%.4f ema_21=%.4f "
-                    "has_momentum=%r",
+                    "angle_ema_21=%.4f ema_144_high=%.4f ema_144_low=%.4f "
+                    "adx_8=%.4f adx_8_rising=%r has_momentum=%r",
                     candidate.trading_symbol,
                     indicators.ema_5,
                     indicators.ema_8,
                     indicators.ema_13,
                     indicators.ema_21,
+                    indicators.angle_ema_21,
+                    indicators.ema_144_high,
+                    indicators.ema_144_low,
+                    indicators.adx_8,
+                    indicators.adx_8_rising,
                     has_momentum,
                 )
 
@@ -240,28 +282,131 @@ class TrackerMomentumEvaluator:
 
 def calculate_momentum_indicators(
     candles: Sequence[DailyCandle],
+    *,
+    angle_threshold_degrees: float = MOMENTUM_ANGLE_THRESHOLD_DEGREES,
 ) -> MomentumIndicators:
-    """Match the notebook's momentum ribbon: EMA 5/8/13/21 of daily closes."""
+    """Match the notebook's EMA ribbons: momentum (5/8/13/21) and trend (144)
+    of daily OHLC, plus the ADX(8) regime filter."""
+    opens = [float(candle.open) for candle in candles]
+    highs = [float(candle.high) for candle in candles]
+    lows = [float(candle.low) for candle in candles]
     closes = [float(candle.close) for candle in candles]
     if len(closes) < MINIMUM_CANDLES:
         raise IndicatorCalculationError(
             f"At least {MINIMUM_CANDLES} daily candles are required"
         )
-    if not all(isfinite(close) for close in closes):
-        raise IndicatorCalculationError("Daily candles contain invalid closes")
+    if not all(
+        isfinite(value)
+        for series in (opens, highs, lows, closes)
+        for value in series
+    ):
+        raise IndicatorCalculationError("Daily candles contain invalid prices")
 
     emas = {period: _ema(closes, period) for period in MOMENTUM_PERIODS}
+    ema_21_series = _ema_series(closes, 21)
+    ema_21_prev = ema_21_series[-2]
+    angle_ema_21 = (
+        degrees(atan((ema_21_series[-1] - ema_21_prev) / ema_21_prev * 100))
+        if ema_21_prev
+        else 0.0
+    )
+
+    adx_series = _adx_series(highs, lows, closes, ADX_PERIOD)
+
     return MomentumIndicators(
         ema_5=emas[5],
         ema_8=emas[8],
         ema_13=emas[13],
         ema_21=emas[21],
+        angle_ema_21=angle_ema_21,
+        angle_threshold_degrees=angle_threshold_degrees,
+        ema_144_high=_ema(highs, TREND_PERIOD),
+        ema_144_close=_ema(closes, TREND_PERIOD),
+        ema_144_low=_ema(lows, TREND_PERIOD),
+        adx_8=adx_series[-1],
+        adx_8_rising=adx_series[-1] > adx_series[-2],
+        latest_open=opens[-1],
+        latest_close=closes[-1],
     )
 
 
-def _ema(closes: Sequence[float], period: int) -> float:
+def _ema_series(closes: Sequence[float], period: int) -> list[float]:
     alpha = 2.0 / (period + 1.0)
     ema = closes[0]
-    for close in closes:
+    series = [ema]
+    for close in closes[1:]:
         ema = alpha * close + (1.0 - alpha) * ema
-    return ema
+        series.append(ema)
+    return series
+
+
+def _ema(closes: Sequence[float], period: int) -> float:
+    return _ema_series(closes, period)[-1]
+
+
+def _true_range(
+    highs: Sequence[float], lows: Sequence[float], closes: Sequence[float]
+) -> list[float]:
+    return [
+        max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
+        for i in range(1, len(closes))
+    ]
+
+
+def _directional_movement(
+    highs: Sequence[float], lows: Sequence[float]
+) -> tuple[list[float], list[float]]:
+    plus_dm = []
+    minus_dm = []
+    for i in range(1, len(highs)):
+        up_move = highs[i] - highs[i - 1]
+        down_move = lows[i - 1] - lows[i]
+        plus_dm.append(up_move if up_move > down_move and up_move > 0 else 0.0)
+        minus_dm.append(
+            down_move if down_move > up_move and down_move > 0 else 0.0
+        )
+    return plus_dm, minus_dm
+
+
+def _wilder_smoothed(values: Sequence[float], window: int) -> list[float]:
+    """Wilder's smoothing: seed with the sum of the first `window` values,
+    then decay the running total by 1/window on each later value."""
+    smoothed = [sum(values[:window])]
+    for value in values[window:]:
+        smoothed.append(smoothed[-1] - smoothed[-1] / window + value)
+    return smoothed
+
+
+def _adx_series(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    window: int,
+) -> list[float]:
+    """Average Directional Index, Wilder's method (the same inputs the
+    notebook's `ta.trend.adx` uses, computed directly rather than depending
+    on pandas/`ta`)."""
+    smoothed_tr = _wilder_smoothed(_true_range(highs, lows, closes), window)
+    plus_dm, minus_dm = _directional_movement(highs, lows)
+    smoothed_plus_dm = _wilder_smoothed(plus_dm, window)
+    smoothed_minus_dm = _wilder_smoothed(minus_dm, window)
+
+    dx = []
+    for smoothed_range, plus, minus in zip(
+        smoothed_tr, smoothed_plus_dm, smoothed_minus_dm
+    ):
+        plus_di = 100 * plus / smoothed_range if smoothed_range else 0.0
+        minus_di = 100 * minus / smoothed_range if smoothed_range else 0.0
+        denominator = plus_di + minus_di
+        dx.append(
+            100 * abs(plus_di - minus_di) / denominator if denominator else 0.0
+        )
+
+    adx = [sum(dx[:window]) / window]
+    for value in dx[window:]:
+        adx.append((adx[-1] * (window - 1) + value) / window)
+    return adx

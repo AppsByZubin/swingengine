@@ -302,7 +302,12 @@ class MomentumAnalyzer:
             candles = self.candle_client.get_daily_candles(
                 access_token, instrument_key, from_date, local_date
             )
-            indicators = calculate_momentum_indicators(candles)
+            indicators = calculate_momentum_indicators(
+                candles,
+                angle_threshold_degrees=(
+                    self.settings.momentum_angle_threshold_degrees
+                ),
+            )
         except (IndicatorCalculationError, UpstoxAPIError) as error:
             LOGGER.warning(
                 "Momentum analysis failed trading_symbol=%r: %s",

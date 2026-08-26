@@ -244,17 +244,28 @@ columns are ignored. Approval must be `True` or `False`. When
 
 At 4 PM `Asia/Kolkata` on weekdays, SwingEngine evaluates every saved asset
 that is not yet tracked and every tracked asset where
-`is_trade_created = FALSE`. It requests the previous 200 calendar days of
-daily Upstox candles and combines the V3 historical response with the V3
+`is_trade_created = FALSE`. It requests the previous 300 calendar days of
+daily Upstox candles (enough for at least ~146 trading days, the EMA 144
+trend ribbon's minimum) and combines the V3 historical response with the V3
 intraday daily candle so the current trading day is included.
 
-The calculation matches the momentum ribbon in
-`visualizer/notebooks/swingengine/ema_ribbon.ipynb`: EMA 5, 8, 13, and 21 of
-daily closes, each using `adjust=False`. Momentum requires the ribbon to be
-fully stacked from fastest to slowest:
+The calculation matches the regime in
+`visualizer/notebooks/swingengine/ema_ribbon.ipynb`: a momentum ribbon (EMA
+5, 8, 13, 21 of daily closes), a trend ribbon (EMA 144 of daily high/close/low),
+and an ADX(8) strength filter, each using `adjust=False`. A signal requires
+the momentum ribbon fully stacked, EMA 21 sloped steeply enough (the 1-day %
+change of EMA 21, converted to degrees via `atan`), ADX(8) above 30 and
+rising versus the prior day, and the candle body on the correct side of the
+EMA 144 band:
 
 ```text
-ema_5 > ema_8 > ema_13 > ema_21
+BUY:  ema_5 > ema_8 > ema_13 > ema_21  and  angle_ema_21 > 40 degrees
+      and adx_8 > 30 and adx_8 rising
+      and ema_21 > ema_144_high and open > ema_144_high and close > ema_144_high
+
+SELL: ema_5 < ema_8 < ema_13 < ema_21  and  angle_ema_21 < -40 degrees
+      and adx_8 > 30 and adx_8 rising
+      and ema_21 < ema_144_low and open < ema_144_low and close < ema_144_low
 ```
 
 A qualifying untracked asset is inserted into `tracker`. A qualifying pending
@@ -275,10 +286,11 @@ The scheduler is enabled by default. Its settings can be overridden:
 export SWINGENGINE_TRACKER_EVALUATION_ENABLED=true
 export SWINGENGINE_TRACKER_EVALUATION_TIME=16:00
 export SWINGENGINE_TRACKER_EVALUATION_TIMEZONE=Asia/Kolkata
-export SWINGENGINE_TRACKER_EVALUATION_LOOKBACK_DAYS=200
+export SWINGENGINE_TRACKER_EVALUATION_LOOKBACK_DAYS=300
 export SWINGENGINE_MOMENTUM_SCAN_LOOKBACK_DAYS=365
 export SWINGENGINE_MOMENTUM_SCAN_MINIMUM_CANDLES=200
 export SWINGENGINE_MOMENTUM_SCAN_REQUEST_INTERVAL_SECONDS=1.0
+export SWINGENGINE_MOMENTUM_ANGLE_THRESHOLD_DEGREES=40
 export SWINGENGINE_TRACKER_EVALUATION_RETRY_INTERVAL_SECONDS=300
 export SWINGENGINE_TRACKER_EVALUATION_POLL_INTERVAL_SECONDS=30
 ```

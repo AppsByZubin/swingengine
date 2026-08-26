@@ -1,5 +1,6 @@
 import logging
 from datetime import UTC, date, datetime, timedelta, timezone
+from math import sin
 from typing import Any
 
 import pytest
@@ -19,6 +20,24 @@ from upstox.client import (
 from upstox.store import TokenState
 
 IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _regime_closes(base_bars: int = 174, rally_bars: int = 25) -> list[float]:
+    """A flat/noisy base followed by a sustained rally.
+
+    A smooth monotonic ramp pins ADX(8) at 100 (never "rising"), so the base
+    needs some noise and the rally needs to be recent enough that ADX is
+    still climbing through the 30 threshold rather than already saturated.
+    """
+    closes = [100 + 3.0 * sin(index * 0.9) for index in range(base_bars)]
+    close = closes[-1]
+    for _ in range(rally_bars):
+        close *= 1.02
+        closes.append(close)
+    return closes
+
+
+RISING = _regime_closes()
 
 
 def asset(symbol: str) -> AssetSearchResult:
@@ -110,7 +129,7 @@ class Client:
             key: quote(
                 key.removeprefix("NSE_EQ|"),
                 (
-                    100 + 199 * 20
+                    RISING[-1] * 1.02
                     if key.endswith("RISING")
                     else 100
                 ),
@@ -132,7 +151,7 @@ class Client:
         if symbol == "BAD":
             raise UpstoxAPIError("historical request failed", 500)
         if symbol == "RISING":
-            return candles([100 + index * 20 for index in range(199)])
+            return candles(RISING)
         if symbol == "SHORT":
             return candles([100.0] * 198)
         return candles([100.0] * 199)
@@ -176,7 +195,7 @@ def test_scanner_refreshes_first_and_exports_only_momentum(
     assert result.ineligible == 0
     assert result.failed == 0
     assert [stock.trading_symbol for stock in result.stocks] == ["RISING"]
-    assert result.stocks[0].ltp == 4080
+    assert result.stocks[0].ltp == pytest.approx(RISING[-1] * 1.02)
     assert sleep_calls == [1.0]
     assert client.ranges == [
         ("RISING", date(2025, 7, 31), date(2026, 7, 29)),

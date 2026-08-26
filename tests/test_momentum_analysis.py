@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime, timedelta, timezone
+from math import sin
 
 import pytest
 
@@ -132,9 +133,26 @@ def catalog_asset(symbol: str) -> AssetSearchResult:
     )
 
 
-RISING = [100 + index * 20 for index in range(60)]
-FALLING = [100 + (60 - index) * 20 for index in range(60)]
-FLAT = [100.0] * 60
+def regime_closes(
+    direction: int, base_bars: int = 140, rally_bars: int = 20
+) -> list[float]:
+    """A flat/noisy base followed by a sustained rally.
+
+    A smooth monotonic ramp pins ADX(8) at 100 (never "rising"), so the base
+    needs some noise and the rally needs to be recent enough that ADX is
+    still climbing through the 30 threshold rather than already saturated.
+    """
+    closes = [100 + 3.0 * sin(index * 0.9) for index in range(base_bars)]
+    close = closes[-1]
+    for _ in range(rally_bars):
+        close *= 1 + direction * 0.02
+        closes.append(close)
+    return closes
+
+
+RISING = regime_closes(1)
+FALLING = regime_closes(-1)
+FLAT = [100.0] * len(RISING)
 
 
 def test_analyze_symbol_requires_a_saved_asset() -> None:

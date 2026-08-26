@@ -429,7 +429,12 @@ class NSEEmaRibbonScanner:
                         started_at,
                     )
                     continue
-                indicators = calculate_momentum_indicators(candles)
+                indicators = calculate_momentum_indicators(
+                    candles,
+                    angle_threshold_degrees=(
+                        self.settings.momentum_angle_threshold_degrees
+                    ),
+                )
                 has_momentum = indicators.has_up_momentum
             except (IndicatorCalculationError, UpstoxAPIError, ValueError):
                 failed += 1
@@ -466,7 +471,8 @@ class NSEEmaRibbonScanner:
                 "Evaluated NSE equity momentum index=%d/%d "
                 "trading_symbol=%r instrument_key=%r ltp=%.4f "
                 "ema_5=%.4f ema_8=%.4f ema_13=%.4f ema_21=%.4f "
-                "has_momentum=%r",
+                "angle_ema_21=%.4f ema_144_high=%.4f ema_144_low=%.4f "
+                "adx_8=%.4f adx_8_rising=%r has_momentum=%r",
                 index,
                 total,
                 asset.trading_symbol,
@@ -476,6 +482,11 @@ class NSEEmaRibbonScanner:
                 indicators.ema_8,
                 indicators.ema_13,
                 indicators.ema_21,
+                indicators.angle_ema_21,
+                indicators.ema_144_high,
+                indicators.ema_144_low,
+                indicators.adx_8,
+                indicators.adx_8_rising,
                 has_momentum,
             )
             self._log_progress(
