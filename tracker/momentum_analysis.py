@@ -347,20 +347,22 @@ class MomentumAnalyzer:
             "Momentum analysis trading_symbol=%r "
             "daily_close=%.4f daily_previous_close=%.4f "
             "daily_angle_ema_21=%.4f daily_angle_threshold=%.4f "
+            "daily_adx_8=%.4f daily_adx_8_rising=%r "
             "daily_side=%r "
             "hourly_ema_5=%.4f hourly_ema_8=%.4f hourly_ema_13=%.4f "
             "hourly_ema_21=%.4f hourly_angle_ema_21=%.4f "
             "hourly_angle_threshold=%.4f "
             "hourly_ema_144_high=%.4f hourly_ema_144_close=%.4f "
             "hourly_ema_144_low=%.4f hourly_latest_open=%.4f "
-            "hourly_latest_close=%.4f hourly_adx_8=%.4f "
-            "hourly_adx_8_rising=%r hourly_side=%r "
+            "hourly_latest_close=%.4f hourly_side=%r "
             "combined_side=%r has_momentum=%r",
             trading_symbol,
             daily.close,
             daily.previous_close,
             daily.angle_ema_21,
             daily.angle_threshold_degrees,
+            daily.adx_8,
+            daily.adx_8_rising,
             daily.side,
             hourly.ema_5,
             hourly.ema_8,
@@ -373,8 +375,6 @@ class MomentumAnalyzer:
             hourly.ema_144_low,
             hourly.latest_open,
             hourly.latest_close,
-            hourly.adx_8,
-            hourly.adx_8_rising,
             hourly.side,
             combined.side,
             combined.has_momentum,

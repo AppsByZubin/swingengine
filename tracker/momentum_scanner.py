@@ -508,9 +508,10 @@ class NSEEmaRibbonScanner:
                 "trading_symbol=%r instrument_key=%r ltp=%.4f "
                 "daily_close=%.4f daily_previous_close=%.4f "
                 "daily_angle_ema_21=%.4f "
+                "daily_adx_8=%.4f daily_adx_8_rising=%r "
                 "ema_5=%.4f ema_8=%.4f ema_13=%.4f ema_21=%.4f "
                 "angle_ema_21=%.4f ema_144_high=%.4f ema_144_low=%.4f "
-                "adx_8=%.4f adx_8_rising=%r side=%r",
+                "side=%r",
                 index,
                 total,
                 asset.trading_symbol,
@@ -519,6 +520,8 @@ class NSEEmaRibbonScanner:
                 daily.close,
                 daily.previous_close,
                 daily.angle_ema_21,
+                daily.adx_8,
+                daily.adx_8_rising,
                 hourly.ema_5,
                 hourly.ema_8,
                 hourly.ema_13,
@@ -526,8 +529,6 @@ class NSEEmaRibbonScanner:
                 hourly.angle_ema_21,
                 hourly.ema_144_high,
                 hourly.ema_144_low,
-                hourly.adx_8,
-                hourly.adx_8_rising,
                 side,
             )
             self._log_progress(

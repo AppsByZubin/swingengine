@@ -124,10 +124,11 @@ def test_price_below_the_ema_144_band_disqualifies_a_steep_ribbon() -> None:
     assert rebound.side is None
 
 
-def test_weak_adx_disqualifies_a_steep_ribbon_above_the_trend_band() -> None:
+def test_hourly_momentum_no_longer_requires_hourly_adx_confirmation() -> None:
     # A brand-new spike: only two rally bars is enough for the fast EMAs to
-    # stack up and clear the trend band, but ADX(8) hasn't built up enough
-    # directional strength yet to confirm the move.
+    # stack up and clear the trend band, even though ADX(8) hasn't built up
+    # enough directional strength yet. ADX confirmation now comes from the
+    # daily timeframe, so the hourly regime no longer checks it.
     closes = [100 + 3.0 * sin(index * 0.9) for index in range(146)]
     price = closes[-1]
     for _ in range(2):
@@ -141,7 +142,25 @@ def test_weak_adx_disqualifies_a_steep_ribbon_above_the_trend_band() -> None:
     assert spike.latest_open > spike.ema_144_high
     assert spike.latest_close > spike.ema_144_high
     assert spike.adx_8 <= 30
-    assert spike.has_up_momentum is False
+    assert spike.has_up_momentum is True
+    assert spike.side == "buy"
+
+
+def test_weak_daily_adx_disqualifies_an_agreeing_daily_close_and_angle() -> None:
+    # Same brand-new-spike shape as above, but evaluated on the daily
+    # candle series: close beats previous close and the EMA(21) slope is
+    # steep enough, yet ADX(8) hasn't built up enough directional strength
+    # to confirm the move, so the daily side stays unconfirmed.
+    closes = [100 + 3.0 * sin(index * 0.9) for index in range(146)]
+    price = closes[-1]
+    for _ in range(2):
+        price *= 1.08
+        closes.append(price)
+
+    spike = calculate_daily_close_momentum(candles(closes))
+    assert spike.close > spike.previous_close
+    assert spike.angle_ema_21 > 30
+    assert spike.adx_8 <= 30
     assert spike.side is None
 
 

@@ -93,12 +93,12 @@ class MomentumIndicators:
 
     @property
     def has_up_momentum(self) -> bool:
-        """Notebook's bullish regime: ADX-confirmed ribbon stacked up, EMA 21
-        rising steeply enough, and the candle body above the EMA 144 band."""
+        """Notebook's bullish regime: ribbon stacked up, EMA 21 rising
+        steeply enough, and the candle body above the EMA 144 band. ADX
+        confirmation comes from the daily timeframe (see
+        ``DailyCloseMomentum``), not this hourly series."""
         return (
-            self.adx_8 > ADX_THRESHOLD
-            and self.adx_8_rising
-            and self.ema_5 > self.ema_8 > self.ema_13 > self.ema_21
+            self.ema_5 > self.ema_8 > self.ema_13 > self.ema_21
             and self.angle_ema_21 > self.angle_threshold_degrees
             and self.ema_21 > self.ema_144_high
             and self.latest_open > self.ema_144_high
@@ -107,12 +107,12 @@ class MomentumIndicators:
 
     @property
     def has_down_momentum(self) -> bool:
-        """Notebook's bearish regime: ADX-confirmed ribbon stacked down, EMA
-        21 falling steeply enough, and the candle body below the EMA 144 band."""
+        """Notebook's bearish regime: ribbon stacked down, EMA 21 falling
+        steeply enough, and the candle body below the EMA 144 band. ADX
+        confirmation comes from the daily timeframe (see
+        ``DailyCloseMomentum``), not this hourly series."""
         return (
-            self.adx_8 > ADX_THRESHOLD
-            and self.adx_8_rising
-            and self.ema_5 < self.ema_8 < self.ema_13 < self.ema_21
+            self.ema_5 < self.ema_8 < self.ema_13 < self.ema_21
             and self.angle_ema_21 < -self.angle_threshold_degrees
             and self.ema_21 < self.ema_144_low
             and self.latest_open < self.ema_144_low
@@ -131,16 +131,20 @@ class MomentumIndicators:
 
 @dataclass(frozen=True, slots=True)
 class DailyCloseMomentum:
-    """The daily-candle confirmation: today's close vs. yesterday's, plus
-    the daily EMA(21) slope."""
+    """The daily-candle confirmation: today's close vs. yesterday's, the
+    daily EMA(21) slope, and the daily ADX(8) regime filter."""
 
     close: float
     previous_close: float
     angle_ema_21: float
     angle_threshold_degrees: float
+    adx_8: float
+    adx_8_rising: bool
 
     @property
     def side(self) -> str | None:
+        if not (self.adx_8 > ADX_THRESHOLD and self.adx_8_rising):
+            return None
         if (
             self.close > self.previous_close
             and self.angle_ema_21 > self.angle_threshold_degrees
@@ -317,13 +321,16 @@ class TrackerMomentumEvaluator:
                     "Evaluated tracker momentum trading_symbol=%r "
                     "daily_close=%.4f daily_previous_close=%.4f "
                     "daily_angle_ema_21=%.4f "
+                    "daily_adx_8=%.4f daily_adx_8_rising=%r "
                     "ema_5=%.4f ema_8=%.4f ema_13=%.4f ema_21=%.4f "
                     "angle_ema_21=%.4f ema_144_high=%.4f ema_144_low=%.4f "
-                    "adx_8=%.4f adx_8_rising=%r side=%r has_momentum=%r",
+                    "side=%r has_momentum=%r",
                     candidate.trading_symbol,
                     daily.close,
                     daily.previous_close,
                     daily.angle_ema_21,
+                    daily.adx_8,
+                    daily.adx_8_rising,
                     hourly.ema_5,
                     hourly.ema_8,
                     hourly.ema_13,
@@ -331,8 +338,6 @@ class TrackerMomentumEvaluator:
                     hourly.angle_ema_21,
                     hourly.ema_144_high,
                     hourly.ema_144_low,
-                    hourly.adx_8,
-                    hourly.adx_8_rising,
                     combined.side,
                     has_momentum,
                 )
@@ -418,14 +423,20 @@ def calculate_daily_close_momentum(
     angle_threshold_degrees: float = DAILY_ANGLE_THRESHOLD_DEGREES,
 ) -> DailyCloseMomentum:
     """Today's daily close vs. yesterday's, confirmed by the daily EMA(21)
-    slope."""
+    slope and the daily ADX(8) regime filter."""
+    highs = [float(candle.high) for candle in candles]
+    lows = [float(candle.low) for candle in candles]
     closes = [float(candle.close) for candle in candles]
     if len(closes) < MINIMUM_DAILY_CLOSE_CANDLES:
         raise IndicatorCalculationError(
             f"At least {MINIMUM_DAILY_CLOSE_CANDLES} daily candles are "
             "required"
         )
-    if not all(isfinite(value) for value in closes):
+    if not all(
+        isfinite(value)
+        for series in (highs, lows, closes)
+        for value in series
+    ):
         raise IndicatorCalculationError("Daily candles contain invalid prices")
 
     ema_21_series = _ema_series(closes, 21)
@@ -436,11 +447,15 @@ def calculate_daily_close_momentum(
         else 0.0
     )
 
+    adx_series = _adx_series(highs, lows, closes, ADX_PERIOD)
+
     return DailyCloseMomentum(
         close=closes[-1],
         previous_close=closes[-2],
         angle_ema_21=angle_ema_21,
         angle_threshold_degrees=angle_threshold_degrees,
+        adx_8=adx_series[-1],
+        adx_8_rising=adx_series[-1] > adx_series[-2],
     )
 
 
