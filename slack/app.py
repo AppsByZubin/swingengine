@@ -47,6 +47,10 @@ from upstox.scheduler import TokenRequestScheduler
 from upstox.service import TokenRotationService
 from upstox.store import TokenStore
 from upstox.webhook import UpstoxWebhookServer
+from zerodha.client import KiteAuthClient
+from zerodha.config import ZerodhaSettings
+from zerodha.service import ZerodhaTokenService
+from zerodha.store import TokenStore as ZerodhaTokenStore
 
 LOGGER = logging.getLogger(__name__)
 
@@ -608,6 +612,7 @@ def run() -> None:
     """Start token services and the blocking Socket Mode listener."""
     settings = Settings.from_env()
     upstox_settings = UpstoxSettings.from_env()
+    zerodha_settings = ZerodhaSettings.from_env()
     asset_settings = AssetCatalogSettings.from_env()
     database_settings = DatabaseSettings.from_env()
     tracker_evaluation_settings = TrackerEvaluationSettings.from_env()
@@ -627,6 +632,11 @@ def run() -> None:
     auth_client = UpstoxAuthClient(upstox_settings)
     token_service = TokenRotationService(
         upstox_settings, token_store, auth_client
+    )
+    zerodha_token_store = ZerodhaTokenStore(zerodha_settings.token_file)
+    zerodha_auth_client = KiteAuthClient(zerodha_settings)
+    zerodha_token_service = ZerodhaTokenService(
+        zerodha_settings, zerodha_token_store, zerodha_auth_client
     )
     asset_catalog = AssetCatalog(asset_settings)
     asset_tracker_repository = AssetTrackerRepository(database_settings)
@@ -674,7 +684,7 @@ def run() -> None:
     slack_app = create_app(
         settings,
         build_router(
-            auth_service=token_service,
+            upstox_auth_service=token_service,
             asset_service=asset_catalog,
             tracker_service=asset_tracker_repository,
             file_exporter=file_exporter,
@@ -683,6 +693,7 @@ def run() -> None:
             momentum_analysis_service=momentum_analyzer,
             fundamental_service=fundamental_scanner,
             fundamental_analysis_service=fundamental_analyzer,
+            zerodha_auth_service=zerodha_token_service,
         ),
         asset_importer,
         tracker_importer,
@@ -708,6 +719,11 @@ def run() -> None:
         LOGGER.error(
             "Upstox token management is not configured: %s",
             "; ".join(upstox_settings.credential_errors),
+        )
+    if zerodha_settings.credential_errors:
+        LOGGER.error(
+            "Zerodha token management is not configured: %s",
+            "; ".join(zerodha_settings.credential_errors),
         )
 
     webhook.start()

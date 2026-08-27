@@ -39,6 +39,15 @@ class FakeAuthService:
         return "Upstox token stored."
 
 
+class FakeZerodhaAuthService:
+    def status_message(self) -> str:
+        return "Zerodha approval is pending."
+
+    def set_token_message(self, access_token: str) -> str:
+        assert access_token == "new-zerodha-token"
+        return "Zerodha token stored."
+
+
 class FakeAssetService:
     def __init__(self) -> None:
         self.search_query = ""
@@ -272,7 +281,8 @@ def test_help_lists_every_supported_command_and_disabled_workflow() -> None:
         "• `/swingengine ping`",
         "• `/swingengine status`",
         "• `/swingengine auth` or `/swingengine auth status`",
-        "• `/swingengine auth set <token>`",
+        "• `/swingengine auth status <upstox|zerodha>`",
+        "• `/swingengine auth set <upstox|zerodha> <token>`",
         "• `/swingengine instrument refresh`",
         "• `/swingengine instrument search <query>`",
         "• `/swingengine asset add <trading_symbol>`",
@@ -319,20 +329,66 @@ def test_status_and_auth_commands_include_upstox_state() -> None:
 
     assert "approval is pending" in router.dispatch("status")["text"]
     assert "approval is pending" in router.dispatch("auth status")["text"]
-    assert "token stored" in router.dispatch("auth set new-token")["text"]
+    assert "token stored" in router.dispatch(
+        "auth set upstox new-token"
+    )["text"]
 
 
-def test_auth_set_requires_a_token() -> None:
-    response = build_router(FakeAuthService()).dispatch("auth set")
+def test_status_and_auth_commands_include_both_broker_states() -> None:
+    router = build_router(
+        FakeAuthService(), zerodha_auth_service=FakeZerodhaAuthService()
+    )
 
-    assert "Provide the token" in response["text"]
+    status_text = router.dispatch("status")["text"]
+    assert "Upstox approval is pending" in status_text
+    assert "Zerodha approval is pending" in status_text
+
+    auth_status_text = router.dispatch("auth status")["text"]
+    assert "Upstox approval is pending" in auth_status_text
+    assert "Zerodha approval is pending" in auth_status_text
+
+    upstox_only = router.dispatch("auth status upstox")["text"]
+    assert upstox_only == "Upstox approval is pending."
+
+    zerodha_only = router.dispatch("auth status zerodha")["text"]
+    assert zerodha_only == "Zerodha approval is pending."
+
+    assert "token stored" in router.dispatch(
+        "auth set zerodha new-zerodha-token"
+    )["text"]
+
+
+def test_auth_set_requires_a_broker_and_token() -> None:
+    router = build_router(FakeAuthService(), zerodha_auth_service=FakeZerodhaAuthService())
+
+    assert "Provide a broker and token" in router.dispatch("auth set")["text"]
+    assert "Provide a broker and token" in router.dispatch(
+        "auth set upstox"
+    )["text"]
+    assert "Provide a broker and token" in router.dispatch(
+        "auth set unknownbroker sometoken"
+    )["text"]
+
+
+def test_auth_status_rejects_unknown_broker() -> None:
+    response = build_router(FakeAuthService()).dispatch("auth status kite")
+
+    assert "Unknown broker" in response["text"]
+
+
+def test_auth_command_reports_unconfigured_broker() -> None:
+    response = build_router(FakeAuthService()).dispatch(
+        "auth set zerodha some-token"
+    )
+
+    assert "Zerodha token management is not configured" in response["text"]
 
 
 def test_auth_request_explains_manual_workflow() -> None:
     response = build_router(FakeAuthService()).dispatch("auth request")
 
     assert "disabled" in response["text"]
-    assert "auth set" in response["text"]
+    assert "auth set upstox" in response["text"]
 
 
 def test_auth_command_rejects_unknown_action() -> None:

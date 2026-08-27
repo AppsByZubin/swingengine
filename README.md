@@ -45,7 +45,9 @@ except CSV exports, which it uploads to the conversation:
 /swingengine ping
 /swingengine status
 /swingengine auth status
-/swingengine auth set <token>
+/swingengine auth status upstox
+/swingengine auth set upstox <token>
+/swingengine auth set zerodha <token>
 /swingengine instrument refresh
 /swingengine instrument search sun
 /swingengine asset add SUNPHARMA
@@ -339,7 +341,7 @@ Generate the access token in Upstox, then submit it from the authorized Slack
 account:
 
 ```text
-/swingengine auth set <token>
+/swingengine auth set upstox <token>
 ```
 
 SwingEngine validates the submitted token with the Upstox profile API before
@@ -354,6 +356,30 @@ the updated manifest. Add the SwingEngine bot to each channel where it should
 import or export CSV files; private channels require an explicit invitation.
 `SLACK_ALERT_USER_ID` also controls which Slack user may run `auth set` and
 `tracker upload`.
+
+## Zerodha token management
+
+Upstox supplies all candle/quote data; Zerodha (Kite Connect) is used only for
+order placement. SwingEngine does not automate the Kite login flow — complete
+it yourself to get an `access_token`, then store it manually:
+
+```bash
+export ZERODHA_TOKEN_MANAGEMENT_ENABLED=true
+export ZERODHA_API_KEY=your-kite-api-key
+export ZERODHA_EXPECTED_USER_ID=your-zerodha-client-id
+export ZERODHA_TOKEN_FILE=/var/lib/swingengine/zerodha-token.json
+```
+
+```text
+/swingengine auth set zerodha <token>
+```
+
+SwingEngine validates the submitted token against the Kite profile API before
+storing it, the same way it validates Upstox tokens. There is no rotation,
+webhook, or periodic health check for Zerodha — the token is stored once and
+read back by whatever later places orders. `/swingengine auth status` reports
+both brokers together; `/swingengine auth status zerodha` reports Zerodha
+alone.
 
 The notifier-webhook implementation remains available for later use. It is
 inactive while `UPSTOX_TOKEN_ROTATION_ENABLED` and `UPSTOX_WEBHOOK_ENABLED`

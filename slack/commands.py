@@ -40,11 +40,12 @@ CommandHandler = Callable[[str], SlackResponse]
 FILE_UPLOAD_KEY = "_file_upload"
 ASSET_IMPORT_MODAL_KEY = "_asset_import_modal"
 TRACKER_IMPORT_MODAL_KEY = "_tracker_import_modal"
+BROKER_NAMES = ("upstox", "zerodha")
 
 
 class TokenAuthService(Protocol):
     def status_message(self) -> str:
-        """Return a credential-free description of Upstox auth state."""
+        """Return a credential-free description of the broker's auth state."""
 
     def set_token_message(self, access_token: str) -> str:
         """Validate, persist, and describe a manually supplied token."""
@@ -163,10 +164,13 @@ def help_command(_: str = "") -> SlackResponse:
         "*SwingEngine commands*\n\n"
         "• `/swingengine` or `/swingengine help` — show this help\n"
         "• `/swingengine ping` — test the Slack connection\n"
-        "• `/swingengine status` — check service and Upstox authorization\n"
-        "• `/swingengine auth` or `/swingengine auth status` — check the "
-        "stored Upstox token\n"
-        "• `/swingengine auth set <token>` — validate and store a new token\n\n"
+        "• `/swingengine status` — check service and broker authorization\n"
+        "• `/swingengine auth` or `/swingengine auth status` — check both "
+        "brokers' stored tokens\n"
+        "• `/swingengine auth status <upstox|zerodha>` — check one broker's "
+        "stored token\n"
+        "• `/swingengine auth set <upstox|zerodha> <token>` — validate and "
+        "store a new token for that broker\n\n"
         "*Instruments*\n"
         "• `/swingengine instrument refresh` — download the latest NSE "
         "instruments\n"
@@ -217,7 +221,7 @@ def help_command(_: str = "") -> SlackResponse:
         "allocations from CSV\n\n"
         "*Disabled workflow*\n"
         "• `/swingengine auth request` — unavailable until the Upstox "
-        "notifier webhook is enabled"
+        "notifier webhook is enabled (Upstox only)"
     )
 
 
@@ -226,38 +230,87 @@ def ping_command(_: str = "") -> SlackResponse:
 
 
 def status_command(
-    _: str = "", auth_service: TokenAuthService | None = None
+    _: str = "",
+    upstox_auth_service: TokenAuthService | None = None,
+    zerodha_auth_service: TokenAuthService | None = None,
 ) -> SlackResponse:
     text = ":large_green_circle: SwingEngine is running."
-    if auth_service is not None:
-        text += f"\n{auth_service.status_message()}"
+    if upstox_auth_service is not None:
+        text += f"\n{upstox_auth_service.status_message()}"
+    if zerodha_auth_service is not None:
+        text += f"\n{zerodha_auth_service.status_message()}"
     return ephemeral(text)
 
 
-def auth_command(
-    arguments: str = "", auth_service: TokenAuthService | None = None
-) -> SlackResponse:
-    if auth_service is None:
-        return ephemeral("Upstox token management is not configured.")
+def _broker_auth_service(
+    broker: str,
+    upstox_auth_service: TokenAuthService | None,
+    zerodha_auth_service: TokenAuthService | None,
+) -> TokenAuthService | None:
+    if broker == "upstox":
+        return upstox_auth_service
+    if broker == "zerodha":
+        return zerodha_auth_service
+    return None
 
-    parts = arguments.strip().split(maxsplit=1)
+
+def auth_command(
+    arguments: str = "",
+    upstox_auth_service: TokenAuthService | None = None,
+    zerodha_auth_service: TokenAuthService | None = None,
+) -> SlackResponse:
+    parts = arguments.strip().split(maxsplit=2)
     action = parts[0].casefold() if parts else "status"
+
     if action == "status":
-        return ephemeral(auth_service.status_message())
-    if action == "set":
-        if len(parts) != 2:
+        broker = parts[1].casefold() if len(parts) >= 2 else ""
+        if not broker:
+            lines = [
+                service.status_message()
+                for service in (upstox_auth_service, zerodha_auth_service)
+                if service is not None
+            ]
+            if not lines:
+                return ephemeral("Broker token management is not configured.")
+            return ephemeral("\n".join(lines))
+        if broker not in BROKER_NAMES:
             return ephemeral(
-                "Provide the token: `/swingengine auth set <token>`."
+                f"Unknown broker `{_code_text(broker)}`. Use `upstox` or "
+                "`zerodha`."
             )
-        return ephemeral(auth_service.set_token_message(parts[1]))
+        service = _broker_auth_service(
+            broker, upstox_auth_service, zerodha_auth_service
+        )
+        if service is None:
+            return ephemeral(
+                f"{broker.capitalize()} token management is not configured."
+            )
+        return ephemeral(service.status_message())
+
+    if action == "set":
+        if len(parts) != 3 or parts[1].casefold() not in BROKER_NAMES:
+            return ephemeral(
+                "Provide a broker and token: "
+                "`/swingengine auth set <upstox|zerodha> <token>`."
+            )
+        broker = parts[1].casefold()
+        service = _broker_auth_service(
+            broker, upstox_auth_service, zerodha_auth_service
+        )
+        if service is None:
+            return ephemeral(
+                f"{broker.capitalize()} token management is not configured."
+            )
+        return ephemeral(service.set_token_message(parts[2]))
+
     if action == "request":
         return ephemeral(
             "Semi-automated token requests are disabled. Generate a token in "
-            "Upstox, then use `/swingengine auth set <token>`."
+            "Upstox, then use `/swingengine auth set upstox <token>`."
         )
     return ephemeral(
-        "Unknown auth action. Use `/swingengine auth status` or "
-        "`/swingengine auth set <token>`."
+        "Unknown auth action. Use `/swingengine auth status [upstox|zerodha]` "
+        "or `/swingengine auth set <upstox|zerodha> <token>`."
     )
 
 
@@ -986,7 +1039,7 @@ class CommandRouter:
 
 
 def build_router(
-    auth_service: TokenAuthService | None = None,
+    upstox_auth_service: TokenAuthService | None = None,
     asset_service: AssetService | None = None,
     tracker_service: AssetTrackerService | None = None,
     file_exporter: CsvFileExporter | None = None,
@@ -995,17 +1048,22 @@ def build_router(
     momentum_analysis_service: MomentumAnalysisService | None = None,
     fundamental_service: FundamentalScanService | None = None,
     fundamental_analysis_service: FundamentalAnalysisService | None = None,
+    zerodha_auth_service: TokenAuthService | None = None,
 ) -> CommandRouter:
     router = CommandRouter()
     router.register("help", help_command)
     router.register("ping", ping_command)
     router.register(
         "status",
-        lambda arguments: status_command(arguments, auth_service),
+        lambda arguments: status_command(
+            arguments, upstox_auth_service, zerodha_auth_service
+        ),
     )
     router.register(
         "auth",
-        lambda arguments: auth_command(arguments, auth_service),
+        lambda arguments: auth_command(
+            arguments, upstox_auth_service, zerodha_auth_service
+        ),
     )
     router.register(
         "instrument",
