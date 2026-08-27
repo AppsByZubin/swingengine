@@ -39,6 +39,9 @@ from tracker.evaluator import TrackerMomentumEvaluator
 from tracker.momentum_analysis import MomentumAnalyzer
 from tracker.momentum_scanner import NSEEmaRibbonScanner
 from tracker.scheduler import TrackerEvaluationScheduler
+from trade.config import TradeExecutionSettings
+from trade.executor import TradeExecutionService
+from trade.scheduler import TradeExecutionScheduler
 from upstox.assets import AssetCatalog, AssetCatalogSettings
 from upstox.client import UpstoxAuthClient
 from upstox.config import UpstoxSettings
@@ -616,6 +619,7 @@ def run() -> None:
     asset_settings = AssetCatalogSettings.from_env()
     database_settings = DatabaseSettings.from_env()
     tracker_evaluation_settings = TrackerEvaluationSettings.from_env()
+    trade_execution_settings = TradeExecutionSettings.from_env()
     logging.basicConfig(
         level=settings.log_level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -681,6 +685,14 @@ def run() -> None:
         asset_tracker_repository,
         settings.bot_token,
     )
+    trade_execution_service = TradeExecutionService(
+        trade_execution_settings,
+        asset_tracker_repository,
+        zerodha_auth_client,
+        auth_client,
+        zerodha_token_store,
+        token_store,
+    )
     slack_app = create_app(
         settings,
         build_router(
@@ -694,6 +706,7 @@ def run() -> None:
             fundamental_service=fundamental_scanner,
             fundamental_analysis_service=fundamental_analyzer,
             zerodha_auth_service=zerodha_token_service,
+            trade_execution_service=trade_execution_service,
         ),
         asset_importer,
         tracker_importer,
@@ -712,6 +725,10 @@ def run() -> None:
         tracker_evaluation_settings,
         tracker_evaluator,
     )
+    trade_execution_scheduler = TradeExecutionScheduler(
+        trade_execution_settings,
+        trade_execution_service,
+    )
     webhook = UpstoxWebhookServer(upstox_settings, token_service)
 
     LOGGER.info("Starting Slack listener for %s", settings.slash_command)
@@ -729,11 +746,13 @@ def run() -> None:
     webhook.start()
     scheduler.start()
     tracker_scheduler.start()
+    trade_execution_scheduler.start()
     monitor.start()
     try:
         SocketModeHandler(slack_app, settings.app_token).start()
     finally:
         monitor.stop()
+        trade_execution_scheduler.stop()
         tracker_scheduler.stop()
         scheduler.stop()
         webhook.stop()

@@ -160,6 +160,11 @@ class FakeEvaluationService:
         )
 
 
+class FakeTradeExecutionService:
+    def run_cycle_message(self) -> str:
+        return ":white_check_mark: Trade execution cycle completed."
+
+
 class FakeMomentumService:
     def scan(self) -> MomentumScanResult:
         return MomentumScanResult(
@@ -299,6 +304,7 @@ def test_help_lists_every_supported_command_and_disabled_workflow() -> None:
         "• `/swingengine tracker add <trading_symbol>`",
         "• `/swingengine tracker delete <trading_symbol>`",
         "• `/swingengine tracker asset evaluate`",
+        "• `/swingengine tracker trade execute`",
         "• `/swingengine tracker list`",
         "• `/swingengine tracker upload`",
         "• `/swingengine auth request`",
@@ -655,6 +661,27 @@ def test_tracker_asset_evaluate_requires_exact_command_and_service() -> None:
     )["text"]
     assert "tracker asset evaluate" in router.dispatch(
         "tracker asset refresh"
+    )["text"]
+
+
+def test_tracker_trade_execute_runs_one_cycle() -> None:
+    response = build_router(
+        trade_execution_service=FakeTradeExecutionService()
+    ).dispatch("tracker trade execute")
+
+    assert response == ephemeral(
+        ":white_check_mark: Trade execution cycle completed."
+    )
+
+
+def test_tracker_trade_execute_requires_exact_command_and_service() -> None:
+    router = build_router()
+
+    assert "not configured" in router.dispatch(
+        "tracker trade execute"
+    )["text"]
+    assert "tracker trade execute" in router.dispatch(
+        "tracker trade run"
     )["text"]
 
 

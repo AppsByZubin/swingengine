@@ -97,6 +97,11 @@ class TrackerEvaluationService(Protocol):
         """Run the tracker momentum screen and return a Slack summary."""
 
 
+class TradeExecutionService(Protocol):
+    def run_cycle_message(self) -> str:
+        """Run one entry/exit trade execution cycle and return a summary."""
+
+
 class MomentumScanService(Protocol):
     def scan(self) -> MomentumScanResult:
         """Screen every NSE equity and return momentum export rows."""
@@ -215,6 +220,8 @@ def help_command(_: str = "") -> SlackResponse:
         "saved asset\n"
         "• `/swingengine tracker asset evaluate` — evaluate saved and pending "
         "tracker assets now\n"
+        "• `/swingengine tracker trade execute` — run one automated trade "
+        "execution cycle now (limit entries, fill/GTT polling, GTT exits)\n"
         "• `/swingengine tracker list` — list tracked assets\n"
         "• `/swingengine tracker list file` — return tracked assets as CSV\n"
         "• `/swingengine tracker upload` — update tracker approvals and "
@@ -494,6 +501,7 @@ def tracker_command(
     tracker_service: AssetTrackerService | None = None,
     file_exporter: CsvFileExporter | None = None,
     evaluation_service: TrackerEvaluationService | None = None,
+    trade_execution_service: TradeExecutionService | None = None,
 ) -> SlackResponse:
     parts = arguments.strip().split(maxsplit=1)
     action = parts[0].casefold() if parts else ""
@@ -505,6 +513,13 @@ def tracker_command(
         if evaluation_service is None:
             return ephemeral("Tracker asset evaluation is not configured.")
         return ephemeral(evaluation_service.evaluate_message())
+
+    if action == "trade":
+        if len(parts) != 2 or parts[1].strip().casefold() != "execute":
+            return ephemeral("Use `/swingengine tracker trade execute`.")
+        if trade_execution_service is None:
+            return ephemeral("Trade execution is not configured.")
+        return ephemeral(trade_execution_service.run_cycle_message())
 
     if action == "upload":
         if len(parts) != 1:
@@ -592,7 +607,8 @@ def tracker_command(
 
     return ephemeral(
         "Unknown tracker action. Use "
-        "`/swingengine tracker add|delete|list|upload ...` or "
+        "`/swingengine tracker add|delete|list|upload ...`, "
+        "`/swingengine tracker trade execute`, or "
         "`/swingengine tracker asset evaluate`."
     )
 
@@ -1049,6 +1065,7 @@ def build_router(
     fundamental_service: FundamentalScanService | None = None,
     fundamental_analysis_service: FundamentalAnalysisService | None = None,
     zerodha_auth_service: TokenAuthService | None = None,
+    trade_execution_service: TradeExecutionService | None = None,
 ) -> CommandRouter:
     router = CommandRouter()
     router.register("help", help_command)
@@ -1104,6 +1121,7 @@ def build_router(
             tracker_service,
             file_exporter,
             evaluation_service,
+            trade_execution_service,
         ),
     )
     return router

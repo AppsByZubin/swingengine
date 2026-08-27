@@ -290,6 +290,7 @@ CREATE TABLE IF NOT EXISTS public.trade_order (
     price DOUBLE PRECISION,
     target_price DOUBLE PRECISION,
     stoploss_price DOUBLE PRECISION,
+    exit_price DOUBLE PRECISION,
     status TEXT NOT NULL DEFAULT 'pending',
     broker_status TEXT,
     error_message TEXT,

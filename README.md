@@ -63,6 +63,7 @@ except CSV exports, which it uploads to the conversation:
 /swingengine tracker list file
 /swingengine tracker upload
 /swingengine tracker asset evaluate
+/swingengine tracker trade execute
 ```
 
 ## NSE instrument search
@@ -300,6 +301,65 @@ export SWINGENGINE_TRACKER_EVALUATION_POLL_INTERVAL_SECONDS=30
 The evaluator uses the access token stored by the Upstox token-management
 workflow. Assets without an `instrument_key` are reported as failed and left
 unchanged.
+
+## Automated trade execution
+
+Once a tracked asset is `is_approved_for_trade`, funded with
+`amount_allocated`, and on the buy side, a scheduler places a Zerodha limit
+entry, waits for the fill, then places a Zerodha GTT exit — all against the
+`trade`/`trade_order` tables. Every step runs every 10 minutes:
+
+1. **Entry scan** (only inside the entry window, default 10:20–15:00 IST):
+   for each eligible tracker row without an open trade, fetch the latest
+   hourly (intraday) Upstox close, round it down to the nearest
+   `SWINGENGINE_TRADE_PRICE_ROUNDING_INCREMENT` (e.g. close 347 → limit
+   345), size the order as `floor(amount_allocated / rounded_price)`, and
+   place a Zerodha `CNC` limit buy. A `trade` + `trade_order(limit)` row is
+   recorded immediately; `tracker.is_trade_created` stays `FALSE` until it
+   fills, so a second entry isn't placed on the next tick — the query
+   instead excludes tracker rows with an already-open trade.
+2. **Limit polling** (every tick, any time): a filled order sets
+   `tracker.is_trade_created = TRUE` and marks the order complete. Past the
+   entry window, any order still unfilled is cancelled at Zerodha and its
+   trade closed, freeing the tracker row for a fresh attempt the next
+   trading day.
+3. **GTT placement** (every tick): once a limit order is filled, its ATR(8)
+   is computed from the same hourly candle series (Wilder's smoothing, the
+   same math already used for this codebase's ADX(8)), and a two-leg GTT is
+   placed: `target = close + 3 × ATR(8)`, `stoploss = close - 2 × ATR(8)`.
+4. **GTT polling** (every tick, all trading days): once Kite reports a GTT
+   triggered and its resulting exchange order complete, the fill price is
+   recorded in `trade_order.exit_price` and the trade is closed.
+
+Only the buy side is automated today; sell-side entries are left for a later
+pass. Enable it and tune its schedule/sizing:
+
+```bash
+export SWINGENGINE_TRADE_EXECUTION_ENABLED=true
+export SWINGENGINE_TRADE_EXECUTION_TIMEZONE=Asia/Kolkata
+export SWINGENGINE_TRADE_ENTRY_WINDOW_START=10:20
+export SWINGENGINE_TRADE_ENTRY_WINDOW_END=15:00
+export SWINGENGINE_TRADE_POLL_INTERVAL_SECONDS=600
+export SWINGENGINE_TRADE_MINIMUM_AMOUNT_ALLOCATED=1000
+export SWINGENGINE_TRADE_ATR_PERIOD=8
+export SWINGENGINE_TRADE_TARGET_ATR_MULTIPLE=3.0
+export SWINGENGINE_TRADE_STOPLOSS_ATR_MULTIPLE=2.0
+export SWINGENGINE_TRADE_PRICE_ROUNDING_INCREMENT=5
+export SWINGENGINE_TRADE_PRODUCT=CNC
+```
+
+Run one cycle immediately instead of waiting for the scheduler:
+
+```text
+/swingengine tracker trade execute
+```
+
+This needs both a valid Upstox token (candles) and a valid Zerodha token
+(orders/GTTs); see "Zerodha token management" above. The Kite Connect
+order/GTT request and response shapes are implemented from Kite's public
+API docs and have not been exercised against a live or sandbox account —
+smoke-test with a small `amount_allocated` before relying on this
+unattended.
 
 The defaults work with the persistent volume described below. They can be
 overridden when needed:

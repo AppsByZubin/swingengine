@@ -1,5 +1,5 @@
 import logging
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 import psycopg
@@ -340,4 +340,129 @@ def test_list_tracker_assets_returns_instrument_keys_for_every_entry() -> None:
     ]
     assert candidates[0].instrument_key == "NSE_EQ|INE044A01036"
     assert candidates[0].tracker_details_id == 7
-    assert "JOIN public.assets" in connection.query
+
+
+def test_list_trade_entry_candidates_filters_by_minimum_allocation() -> None:
+    connection = StubConnection(
+        [(7, 42, "SUN PHARMACEUTICAL IND L", "SUNPHARMA", "NSE_EQ|INE044A01036", 5000.0)]
+    )
+    repository = AssetTrackerRepository(
+        DatabaseSettings(database_url="postgresql:///swingengine"),
+        connect=lambda *_args, **_kwargs: connection,
+    )
+
+    candidates = repository.list_trade_entry_candidates(1000.0)
+
+    assert candidates[0].tracker_details_id == 7
+    assert candidates[0].amount_allocated == 5000.0
+    assert connection.parameters == (1000.0,)
+    assert "is_trade_created = FALSE" in connection.query
+    assert "side = 'buy'" in connection.query
+
+
+def test_create_trade_and_limit_order_persists_both_rows() -> None:
+    connection = StubConnection([(1,)])
+    repository = AssetTrackerRepository(
+        DatabaseSettings(database_url="postgresql:///swingengine"),
+        connect=lambda *_args, **_kwargs: connection,
+    )
+
+    result = repository.create_trade_and_limit_order(
+        asset_id=42,
+        tracker_details_id=7,
+        asset_name="SUN PHARMACEUTICAL IND L",
+        trading_symbol="SUNPHARMA",
+        instrument_key="NSE_EQ|INE044A01036",
+        allocated_amount=10000.0,
+        quantity=28,
+        price=345.0,
+        broker_order_id="BROKER1",
+    )
+
+    assert result.trade_id == 1
+    assert result.order_id == 1
+    assert "INSERT INTO public.trade_order" in connection.query
+    assert connection.parameters == (1, "BROKER1", 28, 345.0)
+
+
+def test_record_limit_order_fill_updates_order_and_tracker() -> None:
+    connection = StubConnection([(1,)])
+    repository = AssetTrackerRepository(
+        DatabaseSettings(database_url="postgresql:///swingengine"),
+        connect=lambda *_args, **_kwargs: connection,
+    )
+    executed_at = datetime(2026, 7, 27, 11, 0, tzinfo=UTC)
+
+    repository.record_limit_order_fill(1, 7, executed_at)
+
+    assert "is_trade_created = TRUE" in connection.query
+    assert connection.parameters == (7,)
+
+
+def test_record_limit_order_fill_raises_when_order_is_missing() -> None:
+    connection = StubConnection([])
+    repository = AssetTrackerRepository(
+        DatabaseSettings(database_url="postgresql:///swingengine"),
+        connect=lambda *_args, **_kwargs: connection,
+    )
+
+    with pytest.raises(RepositoryError, match="Unable to record the limit order fill"):
+        repository.record_limit_order_fill(1, 7, datetime(2026, 7, 27, 11, 0, tzinfo=UTC))
+
+
+def test_list_trades_awaiting_gtt_parses_rows() -> None:
+    connection = StubConnection([(10, "SUNPHARMA", "NSE_EQ|INE044A01036", 28)])
+    repository = AssetTrackerRepository(
+        DatabaseSettings(database_url="postgresql:///swingengine"),
+        connect=lambda *_args, **_kwargs: connection,
+    )
+
+    trades = repository.list_trades_awaiting_gtt()
+
+    assert trades[0].trade_id == 10
+    assert trades[0].quantity == 28
+    assert "NOT EXISTS" in connection.query
+
+
+def test_create_gtt_order_persists_target_and_stoploss() -> None:
+    connection = StubConnection([(5,)])
+    repository = AssetTrackerRepository(
+        DatabaseSettings(database_url="postgresql:///swingengine"),
+        connect=lambda *_args, **_kwargs: connection,
+    )
+
+    order_id = repository.create_gtt_order(10, "TRIGGER1", 28, 360.0, 340.0)
+
+    assert order_id == 5
+    assert connection.parameters == (10, "TRIGGER1", 28, 360.0, 340.0)
+    assert "'gtt'" in connection.query
+
+
+def test_list_pending_gtt_orders_parses_rows() -> None:
+    connection = StubConnection([(5, 10, "TRIGGER1", 360.0, 340.0)])
+    repository = AssetTrackerRepository(
+        DatabaseSettings(database_url="postgresql:///swingengine"),
+        connect=lambda *_args, **_kwargs: connection,
+    )
+
+    orders = repository.list_pending_gtt_orders()
+
+    assert orders[0].order_id == 5
+    assert orders[0].broker_order_id == "TRIGGER1"
+    assert orders[0].target_price == 360.0
+
+
+def test_record_gtt_order_result_closes_the_trade() -> None:
+    connection = StubConnection([(5,)])
+    repository = AssetTrackerRepository(
+        DatabaseSettings(database_url="postgresql:///swingengine"),
+        connect=lambda *_args, **_kwargs: connection,
+    )
+    executed_at = datetime(2026, 7, 27, 11, 0, tzinfo=UTC)
+
+    repository.record_gtt_order_result(5, 10, 361.5, executed_at)
+
+    # StubConnection only retains the most recent execute() call; the last
+    # statement in record_gtt_order_result closes the trade row.
+    assert "status = 'closed'" in connection.query
+    assert connection.parameters == (executed_at, 10)
