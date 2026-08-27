@@ -44,7 +44,7 @@ TRACKER_IMPORT_COLUMNS = (
 )
 REQUIRED_TRACKER_COLUMNS = frozenset(TRACKER_IMPORT_COLUMNS)
 OPTIONAL_TRACKER_COLUMNS = frozenset({"has_fno", "side"})
-MINIMUM_APPROVED_AMOUNT = Decimal("5000")
+MINIMUM_APPROVED_AMOUNT = Decimal("1500")
 
 
 class AssetImportError(RuntimeError):
@@ -632,12 +632,12 @@ class CsvTrackerImporter(_SlackCsvImporter):
                         "`amount_allocated` is too large.",
                     )
                     continue
-                if is_approved and amount <= MINIMUM_APPROVED_AMOUNT:
+                if is_approved and amount < MINIMUM_APPROVED_AMOUNT:
                     failed += 1
                     _append_issue(
                         issues,
                         f"Row {row_number} `{_safe_text(symbol)}`: "
-                        "`amount_allocated` must be greater than 5000 when "
+                        "`amount_allocated` must be at least 1500 when "
                         "`is_approved_for_trade` is `True`.",
                     )
                     continue

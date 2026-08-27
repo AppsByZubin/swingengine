@@ -468,7 +468,7 @@ def test_tracker_import_validates_approval_amount_and_duplicates(
     csv_path = tmp_path / "tracker.csv"
     csv_path.write_text(
         TRACKER_HEADER
-        + "TCS,TCS,True,False,True,5000,2026-07-30\n"
+        + "TCS,TCS,True,False,True,1499,2026-07-30\n"
         + "INFY,INFY,True,False,yes,8000,2026-07-30\n"
         + "RELIANCE,RELIANCE,True,False,False,-1,2026-07-30\n"
         + "TCS,TCS,True,False,False,0,2026-07-30\n"
@@ -486,7 +486,7 @@ def test_tracker_import_validates_approval_amount_and_duplicates(
     assert summary.updated == 1
     assert summary.failed == 4
     assert repository.updates == [("WIPRO", False, 0.0)]
-    assert "greater than 5000" in summary.issues[0]
+    assert "must be at least 1500" in summary.issues[0]
     assert "must be `True` or `False`" in summary.issues[1]
     assert "must be a nonnegative number" in summary.issues[2]
     assert "duplicate trading symbol" in summary.issues[3]

@@ -309,7 +309,7 @@ def tracker_import_modal(channel_id: str) -> dict[str, Any]:
                         "Upload an exported tracker CSV (max 1 MB / 1,000 "
                         "rows). Only `is_approved_for_trade` and "
                         "`amount_allocated` are updated. Approval requires "
-                        "`amount_allocated > 5000`."
+                        "`amount_allocated >= 1500`."
                     ),
                 },
             },

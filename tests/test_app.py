@@ -313,7 +313,7 @@ def test_tracker_upload_command_opens_a_csv_file_modal_for_admin() -> None:
     modal = calls[1][1]["view"]
     assert modal["callback_id"] == TRACKER_IMPORT_CALLBACK_ID
     assert modal["private_metadata"] == "C456"
-    assert "amount_allocated > 5000" in modal["blocks"][0]["text"]["text"]
+    assert "amount_allocated >= 1500" in modal["blocks"][0]["text"]["text"]
     assert modal["blocks"][1]["element"] == {
         "type": "file_input",
         "action_id": TRACKER_IMPORT_ACTION_ID,
