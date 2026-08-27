@@ -43,6 +43,7 @@ TRACKER_IMPORT_COLUMNS = (
     "added_date",
 )
 REQUIRED_TRACKER_COLUMNS = frozenset(TRACKER_IMPORT_COLUMNS)
+OPTIONAL_TRACKER_COLUMNS = frozenset({"has_fno", "side"})
 MINIMUM_APPROVED_AMOUNT = Decimal("5000")
 
 
@@ -537,15 +538,19 @@ class CsvTrackerImporter(_SlackCsvImporter):
             ) as csv_file:
                 reader = csv.DictReader(csv_file, strict=True)
                 columns = _normalized_columns(reader.fieldnames)
+                column_set = frozenset(columns)
                 if (
-                    len(columns) != len(REQUIRED_TRACKER_COLUMNS)
-                    or frozenset(columns) != REQUIRED_TRACKER_COLUMNS
+                    len(columns) != len(column_set)
+                    or not REQUIRED_TRACKER_COLUMNS.issubset(column_set)
+                    or column_set - REQUIRED_TRACKER_COLUMNS
+                    - OPTIONAL_TRACKER_COLUMNS
                 ):
                     raise TrackerImportError(
-                        "The CSV header must contain exactly "
+                        "The CSV header must contain "
                         "`asset_name,trading_symbol,has_momentum,"
                         "is_trade_created,is_approved_for_trade,"
-                        "amount_allocated,added_date`."
+                        "amount_allocated,added_date`, optionally "
+                        "followed by `has_fno,side`."
                     )
 
                 column_names = {

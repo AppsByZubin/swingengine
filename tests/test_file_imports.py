@@ -438,6 +438,30 @@ def test_tracker_import_updates_only_approval_and_allocation(
     assert "Updated: 2" in summary.slack_message()
 
 
+def test_tracker_import_accepts_the_exported_has_fno_and_side_columns(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "tracker.csv"
+    csv_path.write_text(
+        "asset_name,trading_symbol,has_momentum,is_trade_created,"
+        "is_approved_for_trade,amount_allocated,added_date,has_fno,side\n"
+        "Tata Consultancy,TCS,False,False,True,5000.01,2026-07-30,"
+        "True,buy\n",
+        encoding="utf-8",
+    )
+    repository = FakeTrackerRepository()
+
+    summary = _tracker_importer(
+        tmp_path,
+        repository,
+    ).import_path(csv_path)
+
+    assert summary.total == 1
+    assert summary.updated == 1
+    assert summary.failed == 0
+    assert repository.updates == [("TCS", True, 5000.01)]
+
+
 def test_tracker_import_validates_approval_amount_and_duplicates(
     tmp_path: Path,
 ) -> None:
@@ -474,7 +498,7 @@ def test_tracker_import_validates_approval_amount_and_duplicates(
         (
             "trading_symbol,is_approved_for_trade,amount_allocated\n"
             "TCS,True,6000\n",
-            "header must contain exactly",
+            "header must contain",
         ),
         (TRACKER_HEADER, "contains no tracker rows"),
     ],
