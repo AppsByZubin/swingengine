@@ -16,7 +16,9 @@ COPY fundamental ./fundamental
 COPY groww ./groww
 COPY slack ./slack
 COPY tracker ./tracker
+COPY trade ./trade
 COPY upstox ./upstox
+COPY zerodha ./zerodha
 
 RUN groupadd --gid 10001 swingengine \
     && useradd --uid 10001 --gid swingengine --no-create-home swingengine \
