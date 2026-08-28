@@ -298,14 +298,23 @@ class KiteAuthClient:
             raise KiteAPIError(f"Kite {operation} could not be reached") from error
 
         if response.status_code not in (200, 201):
+            error_type, error_message = self._error_detail(response)
             LOGGER.warning(
-                "Kite %s request failed status_code=%d url=%s",
+                "Kite %s request failed status_code=%d error_type=%s "
+                "message=%r url=%s",
                 operation,
                 response.status_code,
+                error_type,
+                error_message,
                 url,
             )
+            detail = (
+                f" ({error_type}: {error_message})"
+                if error_type or error_message
+                else ""
+            )
             raise KiteAPIError(
-                f"Kite {operation} returned HTTP {response.status_code}",
+                f"Kite {operation} returned HTTP {response.status_code}{detail}",
                 response.status_code,
             )
         payload = self._json_object(response, operation)
@@ -386,3 +395,24 @@ class KiteAuthClient:
                 f"Kite {operation} returned a non-object response"
             )
         return payload
+
+    @staticmethod
+    def _error_detail(
+        response: requests.Response,
+    ) -> tuple[str | None, str | None]:
+        """Best-effort extraction of Kite's ``error_type``/``message`` from
+        an error response body, e.g. ``TokenException`` on an expired or
+        invalid access token, or ``PermissionException`` when the API key
+        is not subscribed for order placement."""
+        try:
+            payload = response.json()
+        except requests.JSONDecodeError:
+            return None, None
+        if not isinstance(payload, dict):
+            return None, None
+        error_type = payload.get("error_type")
+        message = payload.get("message")
+        return (
+            str(error_type) if error_type else None,
+            str(message) if message else None,
+        )
