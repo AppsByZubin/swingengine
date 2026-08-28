@@ -9,7 +9,7 @@ from database.repository import (
 )
 from tracker.evaluator import _true_range, _wilder_smoothed
 from trade.config import TradeExecutionSettings
-from trade.executor import TradeExecutionService
+from trade.executor import TradeExecutionService, _round_to_tick_size
 from upstox.client import DailyCandle
 from upstox.store import TokenState as UpstoxTokenState
 from zerodha.client import KiteGtt, KiteOrder
@@ -436,8 +436,12 @@ def test_gtt_placement_uses_atr_of_hourly_candles() -> None:
 
     assert result.gtts_placed == 1
     placed = kite.placed_gtts[0]
-    assert placed["target_price"] == expected_close + 3 * expected_atr
-    assert placed["stoploss_price"] == expected_close - 2 * expected_atr
+    assert placed["target_price"] == _round_to_tick_size(
+        expected_close + 3 * expected_atr
+    )
+    assert placed["stoploss_price"] == _round_to_tick_size(
+        expected_close - 2 * expected_atr
+    )
     assert repository.created_gtts[0][0] == 10
 
 

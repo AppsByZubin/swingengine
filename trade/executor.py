@@ -32,6 +32,9 @@ LOGGER = logging.getLogger(__name__)
 
 EXCHANGE = "NSE"
 TRANSACTION_TYPE_BUY = "BUY"
+# NSE equity orders (and GTT trigger/leg prices) must be a multiple of this
+# tick size, or Kite rejects the request with InputException.
+NSE_TICK_SIZE = 0.05
 
 
 class TradeExecutionError(ValueError):
@@ -445,10 +448,10 @@ class TradeExecutionService:
                 close_price, atr = self._atr(
                     upstox_token, trade.instrument_key, current
                 )
-                target_price = (
+                target_price = _round_to_tick_size(
                     close_price + self.settings.target_atr_multiple * atr
                 )
-                stoploss_price = (
+                stoploss_price = _round_to_tick_size(
                     close_price - self.settings.stoploss_atr_multiple * atr
                 )
                 broker_order_id = self.kite_client.place_gtt(
@@ -645,3 +648,11 @@ def _round_entry_price(close: float, increment: float) -> float:
     if increment <= 0:
         return close
     return floor(close / increment) * increment
+
+
+def _round_to_tick_size(
+    price: float, tick_size: float = NSE_TICK_SIZE
+) -> float:
+    """Round a GTT target/stoploss price to the nearest exchange tick size
+    so Kite does not reject it with InputException."""
+    return round(round(price / tick_size) * tick_size, 2)
