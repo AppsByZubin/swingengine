@@ -503,9 +503,14 @@ export SWINGENGINE_DATABASE_CONNECT_TIMEOUT_SECONDS=10
 ```
 
 Use a PostgreSQL role with `SELECT`, `INSERT`, `UPDATE`, and `DELETE`
-privileges on the `assets` and `tracker` tables, plus usage on their identity
-sequences. `UPDATE` on `tracker` is required by momentum reevaluation. Keep
-credentials out of source control.
+privileges on the `assets`, `tracker`, `trade`, and `trade_order` tables, plus
+usage on their identity sequences. `UPDATE` on `tracker` is required by
+momentum reevaluation. Keep credentials out of source control.
+
+Pass `SWINGENGINE_DATABASE_APP_ROLE=swingengine_app` to `setup_database.sh`
+(or `--set=swingengine_app_role=...` when running `database/schema.sql`
+directly) to have the schema grant these privileges automatically, so new
+tables never end up missing runtime grants.
 
 ## Container image
 

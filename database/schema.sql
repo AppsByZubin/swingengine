@@ -32,6 +32,10 @@
   \gset
 \endif
 
+-- Optional: the runtime role the application connects as (see README.md
+-- "PostgreSQL database"). When set, it is granted access to every table
+-- below so new tables do not silently lack runtime privileges.
+
 -- CREATE DATABASE cannot run inside a transaction. \gexec executes the
 -- generated statement only when the requested database does not yet exist.
 SELECT format(
@@ -327,6 +331,21 @@ COMMENT ON TABLE public.trade IS
     'One trade opened per tracker asset approved for trading.';
 COMMENT ON TABLE public.trade_order IS
     'Broker orders (limit entry, GTT target/stoploss exit) placed for a trade.';
+
+-- Grant the runtime application role access to every table and identity
+-- sequence. Re-list new tables/sequences here as they are added so runtime
+-- privileges never lag behind the schema again.
+\if :{?swingengine_app_role}
+GRANT SELECT, INSERT, UPDATE, DELETE
+    ON public.assets, public.tracker, public.trade, public.trade_order
+    TO :"swingengine_app_role";
+GRANT USAGE, SELECT ON SEQUENCE
+    public.assets_asset_id_seq,
+    public.tracker_tracker_details_id_seq,
+    public.trade_trade_id_seq,
+    public.trade_order_order_id_seq
+    TO :"swingengine_app_role";
+\endif
 
 RESET ROLE;
 

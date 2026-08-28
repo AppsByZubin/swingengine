@@ -24,6 +24,7 @@ POSTGRES_ADMIN_USER="${POSTGRES_ADMIN_USER:-postgres}"
 DATABASE_OWNER="${SWINGENGINE_DATABASE_OWNER:-${POSTGRES_ADMIN_USER}}"
 MAINTENANCE_DATABASE="${POSTGRES_MAINTENANCE_DATABASE:-postgres}"
 POSTGRES_OS_USER="${POSTGRES_OS_USER:-postgres}"
+APP_ROLE="${SWINGENGINE_DATABASE_APP_ROLE:-}"
 
 fail() {
     echo "Error: $*" >&2
@@ -45,6 +46,9 @@ validate_identifier "${POSTGRES_ADMIN_USER}" "POSTGRES_ADMIN_USER"
 validate_identifier "${MAINTENANCE_DATABASE}" \
     "POSTGRES_MAINTENANCE_DATABASE"
 validate_identifier "${POSTGRES_OS_USER}" "POSTGRES_OS_USER"
+if [[ -n "${APP_ROLE}" ]]; then
+    validate_identifier "${APP_ROLE}" "SWINGENGINE_DATABASE_APP_ROLE"
+fi
 
 PSQL_BIN="$(command -v psql || true)"
 [[ -n "${PSQL_BIN}" ]] \
@@ -75,6 +79,15 @@ run_as_postgres() {
 
 echo "Applying SwingEngine schema to database \"${DATABASE_NAME}\"..."
 
+PSQL_SET_ARGS=(
+    --set=ON_ERROR_STOP=on
+    --set="swingengine_database=${DATABASE_NAME}"
+    --set="swingengine_owner=${DATABASE_OWNER}"
+)
+if [[ -n "${APP_ROLE}" ]]; then
+    PSQL_SET_ARGS+=(--set="swingengine_app_role=${APP_ROLE}")
+fi
+
 # The invoking shell opens the SQL file before switching users. This also
 # works when the repository is inside a home directory that postgres cannot
 # traverse.
@@ -82,9 +95,7 @@ run_as_postgres \
     -X \
     --username="${POSTGRES_ADMIN_USER}" \
     --dbname="${MAINTENANCE_DATABASE}" \
-    --set=ON_ERROR_STOP=on \
-    --set="swingengine_database=${DATABASE_NAME}" \
-    --set="swingengine_owner=${DATABASE_OWNER}" \
+    "${PSQL_SET_ARGS[@]}" \
     < "${SCHEMA_FILE}"
 
 echo "SwingEngine database setup completed successfully."

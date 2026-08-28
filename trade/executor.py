@@ -336,13 +336,16 @@ class TradeExecutionService:
             return filled, expired
 
         try:
-            broker_orders = {
-                order.order_id: order
-                for order in self.kite_client.get_orders(zerodha_token)
-            }
+            fetched_orders = self.kite_client.get_orders(zerodha_token)
         except KiteAPIError as error:
             LOGGER.warning("Kite order list fetch failed: %s", error)
             return filled, expired
+        LOGGER.info(
+            "Fetched Kite order list count=%d pending=%d",
+            len(fetched_orders),
+            len(pending),
+        )
+        broker_orders = {order.order_id: order for order in fetched_orders}
 
         local_time = current.astimezone(
             ZoneInfo(self.settings.timezone_name)
@@ -503,17 +506,24 @@ class TradeExecutionService:
             return completed, failed
 
         try:
-            gtts = {
-                gtt.trigger_id: gtt
-                for gtt in self.kite_client.get_gtts(zerodha_token)
-            }
-            orders = {
-                order.order_id: order
-                for order in self.kite_client.get_orders(zerodha_token)
-            }
+            fetched_gtts = self.kite_client.get_gtts(zerodha_token)
         except KiteAPIError as error:
-            LOGGER.warning("Kite GTT/order fetch failed: %s", error)
+            LOGGER.warning("Kite GTT list fetch failed: %s", error)
             return completed, failed
+        try:
+            fetched_orders = self.kite_client.get_orders(zerodha_token)
+        except KiteAPIError as error:
+            LOGGER.warning("Kite order list fetch failed: %s", error)
+            return completed, failed
+        LOGGER.info(
+            "Fetched Kite GTT/order lists gtt_count=%d order_count=%d "
+            "pending=%d",
+            len(fetched_gtts),
+            len(fetched_orders),
+            len(pending),
+        )
+        gtts = {gtt.trigger_id: gtt for gtt in fetched_gtts}
+        orders = {order.order_id: order for order in fetched_orders}
 
         for pending_order in pending:
             gtt = gtts.get(pending_order.broker_order_id)
@@ -601,16 +611,32 @@ class TradeExecutionService:
     def _zerodha_access_token(self) -> str | None:
         try:
             state = self.zerodha_token_store.load()
-        except ZerodhaTokenStateError:
+        except ZerodhaTokenStateError as error:
+            LOGGER.warning("Zerodha token state unreadable: %s", error)
             return None
-        return state.access_token if state.is_valid() else None
+        if not state.is_valid():
+            LOGGER.warning(
+                "Skipping trade execution: Zerodha token is not valid "
+                "(status=%r)",
+                state.validation_status,
+            )
+            return None
+        return state.access_token
 
     def _upstox_access_token(self, current: datetime) -> str | None:
         try:
             state = self.upstox_token_store.load()
-        except UpstoxTokenStateError:
+        except UpstoxTokenStateError as error:
+            LOGGER.warning("Upstox token state unreadable: %s", error)
             return None
-        return state.access_token if state.is_valid(current) else None
+        if not state.is_valid(current):
+            LOGGER.warning(
+                "Skipping trade execution: Upstox token is not valid "
+                "(status=%r)",
+                state.validation_status,
+            )
+            return None
+        return state.access_token
 
 
 def _round_entry_price(close: float, increment: float) -> float:
