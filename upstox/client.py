@@ -100,9 +100,16 @@ class UpstoxAuthClient:
                     timeout=self.settings.request_timeout_seconds,
                 )
         except requests.RequestException as error:
+            LOGGER.warning(
+                "Upstox token request failed transport error=%s", type(error).__name__
+            )
             raise UpstoxAPIError("Upstox token request could not be reached") from error
 
         if response.status_code != 200:
+            LOGGER.warning(
+                "Upstox token request failed status_code=%d",
+                response.status_code,
+            )
             raise UpstoxAPIError(
                 f"Upstox token request returned HTTP {response.status_code}",
                 response.status_code,
@@ -112,13 +119,19 @@ class UpstoxAuthClient:
         if payload.get("status") != "success" or not isinstance(
             payload.get("data"), dict
         ):
+            LOGGER.warning("Upstox token request returned an invalid response")
             raise UpstoxAPIError("Upstox token request returned an invalid response")
         try:
             authorization_expiry = int(payload["data"]["authorization_expiry"])
         except (KeyError, TypeError, ValueError) as error:
+            LOGGER.warning("Upstox token request omitted authorization_expiry")
             raise UpstoxAPIError(
                 "Upstox token request omitted authorization_expiry"
             ) from error
+        LOGGER.info(
+            "Upstox token request succeeded authorization_expiry=%d",
+            authorization_expiry,
+        )
         return TokenRequest(authorization_expiry=authorization_expiry)
 
     def verify_access_token(self, access_token: str) -> None:
@@ -135,11 +148,19 @@ class UpstoxAuthClient:
                     timeout=self.settings.request_timeout_seconds,
                 )
         except requests.RequestException as error:
+            LOGGER.warning(
+                "Upstox token verification failed transport error=%s",
+                type(error).__name__,
+            )
             raise UpstoxAPIError(
                 "Upstox token verification could not be reached"
             ) from error
 
         if response.status_code != 200:
+            LOGGER.warning(
+                "Upstox token verification failed status_code=%d",
+                response.status_code,
+            )
             raise UpstoxAPIError(
                 f"Upstox token verification returned HTTP {response.status_code}",
                 response.status_code,
@@ -147,13 +168,19 @@ class UpstoxAuthClient:
         payload = self._json_object(response, "token verification")
         data: Any = payload.get("data")
         if payload.get("status") != "success" or not isinstance(data, dict):
+            LOGGER.warning("Upstox token verification returned an invalid response")
             raise UpstoxAPIError(
                 "Upstox token verification returned an invalid response"
             )
         if str(data.get("user_id", "")) != self.settings.expected_user_id:
+            LOGGER.warning(
+                "Upstox token verification returned an unexpected user_id=%r",
+                data.get("user_id"),
+            )
             raise UpstoxAPIError(
                 "Upstox token verification returned an unexpected user"
             )
+        LOGGER.info("Upstox token verification succeeded")
 
     def get_daily_candles(
         self,
@@ -400,15 +427,36 @@ class UpstoxAuthClient:
                     )
                     self._sleep(delay)
                     continue
+                LOGGER.warning(
+                    "Upstox %s request failed after %d attempt(s) "
+                    "error=%s url=%s",
+                    operation,
+                    attempt,
+                    type(error).__name__,
+                    url,
+                )
                 raise UpstoxAPIError(
                     f"Upstox {operation} request could not be reached"
                 ) from error
             except requests.RequestException as error:
+                LOGGER.warning(
+                    "Upstox %s request failed transport error=%s url=%s",
+                    operation,
+                    type(error).__name__,
+                    url,
+                )
                 raise UpstoxAPIError(
                     f"Upstox {operation} request could not be reached"
                 ) from error
 
             if response.status_code == 200:
+                LOGGER.info(
+                    "Upstox %s request succeeded attempt=%d/%d url=%s",
+                    operation,
+                    attempt,
+                    AUTHORIZED_GET_MAX_ATTEMPTS,
+                    url,
+                )
                 return self._json_object(response, operation)
             if (
                 response.status_code in RETRIABLE_HTTP_STATUS_CODES
@@ -431,6 +479,15 @@ class UpstoxAuthClient:
                     close_response()
                 self._sleep(delay)
                 continue
+            LOGGER.warning(
+                "Upstox %s request failed attempt=%d/%d status_code=%d "
+                "url=%s",
+                operation,
+                attempt,
+                AUTHORIZED_GET_MAX_ATTEMPTS,
+                response.status_code,
+                url,
+            )
             raise UpstoxAPIError(
                 f"Upstox {operation} request returned HTTP "
                 f"{response.status_code}",

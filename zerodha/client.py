@@ -7,12 +7,15 @@ JSON, unlike Upstox's API — see ``_request`` below.
 
 from dataclasses import dataclass
 import json
+import logging
 from typing import Any
 from urllib.parse import quote
 
 import requests
 
 from zerodha.config import ZerodhaSettings
+
+LOGGER = logging.getLogger(__name__)
 
 
 class KiteAPIError(RuntimeError):
@@ -94,6 +97,11 @@ class KiteAuthClient:
         order_id = data.get("order_id") if isinstance(data, dict) else None
         if not isinstance(order_id, str) or not order_id:
             raise KiteAPIError("Kite order placement returned no order_id")
+        LOGGER.info(
+            "Kite limit order placed tradingsymbol=%r order_id=%s",
+            tradingsymbol,
+            order_id,
+        )
         return order_id
 
     def cancel_order(self, access_token: str, order_id: str) -> None:
@@ -105,6 +113,7 @@ class KiteAuthClient:
             access_token,
             "order cancellation",
         )
+        LOGGER.info("Kite order cancelled order_id=%s", order_id)
 
     def get_orders(self, access_token: str) -> list[KiteOrder]:
         """Return the current status of every order placed today."""
@@ -197,6 +206,11 @@ class KiteAuthClient:
         trigger_id = data.get("trigger_id") if isinstance(data, dict) else None
         if trigger_id is None:
             raise KiteAPIError("Kite GTT placement returned no trigger_id")
+        LOGGER.info(
+            "Kite GTT placed tradingsymbol=%r trigger_id=%s",
+            tradingsymbol,
+            trigger_id,
+        )
         return str(trigger_id)
 
     def get_gtts(self, access_token: str) -> list[KiteGtt]:
@@ -253,6 +267,13 @@ class KiteAuthClient:
         operation: str,
         data: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        LOGGER.info(
+            "Kite %s request method=%s url=%s data=%s",
+            operation,
+            method,
+            url,
+            data,
+        )
         try:
             response = self._session.request(
                 method,
@@ -268,16 +289,39 @@ class KiteAuthClient:
                 timeout=self.settings.request_timeout_seconds,
             )
         except requests.RequestException as error:
+            LOGGER.warning(
+                "Kite %s request failed transport error=%s url=%s",
+                operation,
+                type(error).__name__,
+                url,
+            )
             raise KiteAPIError(f"Kite {operation} could not be reached") from error
 
         if response.status_code not in (200, 201):
+            LOGGER.warning(
+                "Kite %s request failed status_code=%d url=%s",
+                operation,
+                response.status_code,
+                url,
+            )
             raise KiteAPIError(
                 f"Kite {operation} returned HTTP {response.status_code}",
                 response.status_code,
             )
         payload = self._json_object(response, operation)
         if payload.get("status") != "success":
+            LOGGER.warning(
+                "Kite %s request returned an unsuccessful response url=%s",
+                operation,
+                url,
+            )
             raise KiteAPIError(f"Kite {operation} returned an unsuccessful response")
+        LOGGER.info(
+            "Kite %s request succeeded status_code=%d url=%s",
+            operation,
+            response.status_code,
+            url,
+        )
         return payload
 
     def verify_access_token(self, access_token: str) -> None:
@@ -295,11 +339,19 @@ class KiteAuthClient:
                 timeout=self.settings.request_timeout_seconds,
             )
         except requests.RequestException as error:
+            LOGGER.warning(
+                "Kite token verification failed transport error=%s",
+                type(error).__name__,
+            )
             raise KiteAPIError(
                 "Kite token verification could not be reached"
             ) from error
 
         if response.status_code != 200:
+            LOGGER.warning(
+                "Kite token verification failed status_code=%d",
+                response.status_code,
+            )
             raise KiteAPIError(
                 f"Kite token verification returned HTTP {response.status_code}",
                 response.status_code,
@@ -307,13 +359,19 @@ class KiteAuthClient:
         payload = self._json_object(response, "token verification")
         data: Any = payload.get("data")
         if payload.get("status") != "success" or not isinstance(data, dict):
+            LOGGER.warning("Kite token verification returned an invalid response")
             raise KiteAPIError(
                 "Kite token verification returned an invalid response"
             )
         if str(data.get("user_id", "")) != self.settings.expected_user_id:
+            LOGGER.warning(
+                "Kite token verification returned an unexpected user_id=%r",
+                data.get("user_id"),
+            )
             raise KiteAPIError(
                 "Kite token verification returned an unexpected user"
             )
+        LOGGER.info("Kite token verification succeeded")
 
     @staticmethod
     def _json_object(
