@@ -307,6 +307,7 @@ def test_help_lists_every_supported_command_and_disabled_workflow() -> None:
         "• `/swingengine tracker trade execute`",
         "• `/swingengine tracker list`",
         "• `/swingengine tracker upload`",
+        "• `/swingengine order pool`",
         "• `/swingengine auth request`",
     )
     for entry in expected_entries:
@@ -683,6 +684,23 @@ def test_tracker_trade_execute_requires_exact_command_and_service() -> None:
     assert "tracker trade execute" in router.dispatch(
         "tracker trade run"
     )["text"]
+
+
+def test_order_pool_runs_one_cycle() -> None:
+    response = build_router(
+        trade_execution_service=FakeTradeExecutionService()
+    ).dispatch("order pool")
+
+    assert response == ephemeral(
+        ":white_check_mark: Trade execution cycle completed."
+    )
+
+
+def test_order_pool_requires_exact_command_and_service() -> None:
+    router = build_router()
+
+    assert "not configured" in router.dispatch("order pool")["text"]
+    assert "order pool" in router.dispatch("order run")["text"]
 
 
 def test_momentum_list_file_runs_scan_and_requests_csv_upload(tmp_path) -> None:

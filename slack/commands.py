@@ -226,6 +226,11 @@ def help_command(_: str = "") -> SlackResponse:
         "• `/swingengine tracker list file` — return tracked assets as CSV\n"
         "• `/swingengine tracker upload` — update tracker approvals and "
         "allocations from CSV\n\n"
+        "*Orders*\n"
+        "• `/swingengine order pool` — poll broker orders now: place "
+        "missing limit entries, mark fills, place missing GTT exits, and "
+        "close trades whose GTT has triggered (same cycle as `tracker "
+        "trade execute`)\n\n"
         "*Disabled workflow*\n"
         "• `/swingengine auth request` — unavailable until the Upstox "
         "notifier webhook is enabled (Upstox only)"
@@ -611,6 +616,18 @@ def tracker_command(
         "`/swingengine tracker trade execute`, or "
         "`/swingengine tracker asset evaluate`."
     )
+
+
+def order_command(
+    arguments: str = "",
+    trade_execution_service: TradeExecutionService | None = None,
+) -> SlackResponse:
+    action = arguments.strip().casefold()
+    if action != "pool":
+        return ephemeral("Use `/swingengine order pool`.")
+    if trade_execution_service is None:
+        return ephemeral("Trade execution is not configured.")
+    return ephemeral(trade_execution_service.run_cycle_message())
 
 
 MOMENTUM_ANALYZE_USAGE = (
@@ -1123,5 +1140,9 @@ def build_router(
             evaluation_service,
             trade_execution_service,
         ),
+    )
+    router.register(
+        "order",
+        lambda arguments: order_command(arguments, trade_execution_service),
     )
     return router

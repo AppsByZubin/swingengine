@@ -774,7 +774,7 @@ class AssetTrackerRepository:
             ) from error
 
     def record_limit_order_cancellation(
-        self, order_id: int, trade_id: int
+        self, order_id: int, trade_id: int, closed_at: datetime
     ) -> None:
         """Cancel a stale/broker-rejected limit order and close its trade."""
         try:
@@ -795,10 +795,10 @@ class AssetTrackerRepository:
                 connection.execute(
                     """
                     UPDATE public.trade
-                    SET status = 'closed', closed_at = now()
+                    SET status = 'closed', closed_at = %s
                     WHERE trade_id = %s
                     """,
-                    (trade_id,),
+                    (closed_at, trade_id),
                 )
         except RepositoryError:
             raise

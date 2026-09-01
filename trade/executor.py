@@ -71,7 +71,7 @@ class TradeRepository(Protocol):
         """Mark a limit order filled and flag its tracker entry as traded."""
 
     def record_limit_order_cancellation(
-        self, order_id: int, trade_id: int
+        self, order_id: int, trade_id: int, closed_at: datetime
     ) -> None:
         """Cancel a stale/broker-rejected limit order and close its trade."""
 
@@ -384,7 +384,7 @@ class TradeExecutionService:
             if broker_order.status in {"CANCELLED", "REJECTED"}:
                 try:
                     self.repository.record_limit_order_cancellation(
-                        order.order_id, order.trade_id
+                        order.order_id, order.trade_id, current
                     )
                 except RepositoryError as error:
                     LOGGER.warning(
@@ -403,7 +403,7 @@ class TradeExecutionService:
                         zerodha_token, order.broker_order_id
                     )
                     self.repository.record_limit_order_cancellation(
-                        order.order_id, order.trade_id
+                        order.order_id, order.trade_id, current
                     )
                 except (KiteAPIError, RepositoryError) as error:
                     LOGGER.warning(

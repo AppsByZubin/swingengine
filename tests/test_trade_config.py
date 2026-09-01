@@ -11,7 +11,7 @@ def test_execution_is_disabled_by_default() -> None:
     assert settings.enabled is False
     assert settings.entry_window_start == time(10, 20)
     assert settings.entry_window_end == time(15, 0)
-    assert settings.poll_interval_seconds == 600
+    assert settings.poll_interval_seconds == 300
     assert settings.minimum_amount_allocated == 1000.0
     assert settings.atr_period == 8
     assert settings.target_atr_multiple == 3.0

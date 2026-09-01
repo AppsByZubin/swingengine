@@ -55,8 +55,8 @@ class FakeRepository:
     def record_limit_order_fill(self, order_id, tracker_details_id, executed_at):
         self.limit_fills.append((order_id, tracker_details_id, executed_at))
 
-    def record_limit_order_cancellation(self, order_id, trade_id):
-        self.limit_cancellations.append((order_id, trade_id))
+    def record_limit_order_cancellation(self, order_id, trade_id, closed_at):
+        self.limit_cancellations.append((order_id, trade_id, closed_at))
 
     def list_trades_awaiting_gtt(self):
         return self.trades_awaiting_gtt
@@ -373,7 +373,7 @@ def test_stale_limit_order_is_cancelled_past_the_entry_window() -> None:
 
     assert result.limits_expired == 1
     assert kite.cancelled_orders == ["BROKER1"]
-    assert repository.limit_cancellations == [(1, 10)]
+    assert repository.limit_cancellations == [(1, 10, PAST_WINDOW)]
 
 
 def test_stale_limit_order_is_left_open_within_the_entry_window() -> None:

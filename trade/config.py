@@ -138,7 +138,7 @@ class TradeExecutionSettings:
             )
 
         poll_interval_seconds = _parse_positive_int(
-            values, "SWINGENGINE_TRADE_POLL_INTERVAL_SECONDS", 600, errors
+            values, "SWINGENGINE_TRADE_POLL_INTERVAL_SECONDS", 300, errors
         )
         minimum_amount_allocated = _parse_positive_float(
             values,
