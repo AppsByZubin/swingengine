@@ -180,8 +180,24 @@ def test_get_gtts_parses_triggered_leg_order_ids() -> None:
                             "id": 555,
                             "status": "triggered",
                             "orders": [
-                                {"result": {"order_id": "SL1"}},
-                                {"result": {"order_id": "TGT1"}},
+                                {
+                                    "result": {
+                                        "order_result": {
+                                            "status": "success",
+                                            "order_id": "SL1",
+                                            "rejection_reason": "",
+                                        }
+                                    }
+                                },
+                                {
+                                    "result": {
+                                        "order_result": {
+                                            "status": "success",
+                                            "order_id": "TGT1",
+                                            "rejection_reason": "",
+                                        }
+                                    }
+                                },
                             ],
                         }
                     ],

@@ -237,9 +237,14 @@ class KiteAuthClient:
                         if not isinstance(leg, dict):
                             continue
                         result = leg.get("result")
-                        order_id = (
-                            result.get("order_id")
+                        order_result = (
+                            result.get("order_result")
                             if isinstance(result, dict)
+                            else None
+                        )
+                        order_id = (
+                            order_result.get("order_id")
+                            if isinstance(order_result, dict)
                             else None
                         )
                         leg_order_ids[index] = (
