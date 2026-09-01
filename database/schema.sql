@@ -50,6 +50,17 @@ WHERE NOT EXISTS (
 )
 \gexec
 
+-- Every TIMESTAMPTZ column stores a UTC instant; this only changes the
+-- default display/session timezone so the app and anyone querying directly
+-- (psql, admin tools) see IST instead of UTC unless they override it
+-- themselves. Runs unconditionally so re-running this file also fixes an
+-- already-created database.
+SELECT format(
+    'ALTER DATABASE %I SET timezone TO ''Asia/Kolkata''',
+    :'swingengine_database'
+)
+\gexec
+
 -- Reuse the current host, port, user, password, and SSL settings.
 \connect :swingengine_database
 

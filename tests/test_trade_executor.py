@@ -32,6 +32,7 @@ class FakeRepository:
         self.created_gtts: list[tuple] = []
         self.pending_gtt_orders: list[PendingGttOrder] = []
         self.gtt_results: list[tuple] = []
+        self.orders_checked: list[tuple] = []
         self.list_candidates_calls = 0
         self._next_id = 1
 
@@ -76,6 +77,9 @@ class FakeRepository:
 
     def record_gtt_order_result(self, order_id, trade_id, exit_price, executed_at):
         self.gtt_results.append((order_id, trade_id, exit_price, executed_at))
+
+    def record_orders_checked(self, order_ids, checked_at):
+        self.orders_checked.append((tuple(order_ids), checked_at))
 
 
 class FakeKiteClient:
@@ -342,6 +346,7 @@ def test_limit_order_fill_is_recorded() -> None:
 
     assert result.limits_filled == 1
     assert repository.limit_fills == [(1, 20, WITHIN_WINDOW)]
+    assert repository.orders_checked == [((1,), WITHIN_WINDOW)]
 
 
 def test_stale_limit_order_is_cancelled_past_the_entry_window() -> None:
@@ -482,6 +487,36 @@ def test_gtt_exit_is_recorded_when_triggered() -> None:
 
     assert result.exits_completed == 1
     assert repository.gtt_results == [(5, 10, 361.5, WITHIN_WINDOW)]
+    assert repository.orders_checked == [((5,), WITHIN_WINDOW)]
+
+
+def test_gtt_still_pending_is_checked_but_not_closed() -> None:
+    repository = FakeRepository()
+    repository.pending_gtt_orders = [
+        PendingGttOrder(
+            order_id=5,
+            trade_id=10,
+            broker_order_id="TRIGGER1",
+            target_price=360.0,
+            stoploss_price=340.0,
+        )
+    ]
+    kite = FakeKiteClient()
+    kite.gtts_response = [
+        KiteGtt(
+            trigger_id="TRIGGER1",
+            status="active",
+            stoploss_order_id=None,
+            target_order_id=None,
+        )
+    ]
+    service, repository, kite = build_service(repository=repository, kite_client=kite)
+
+    result = service.run_cycle(now=WITHIN_WINDOW)
+
+    assert result.exits_completed == 0
+    assert repository.gtt_results == []
+    assert repository.orders_checked == [((5,), WITHIN_WINDOW)]
 
 
 def test_run_cycle_reports_disabled() -> None:

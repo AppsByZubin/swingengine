@@ -1,6 +1,7 @@
 """Orchestrate limit-entry placement, fill polling, GTT exit placement, and
 GTT poll-to-close — the four steps of automated trade execution."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 import logging
@@ -99,6 +100,11 @@ class TradeRepository(Protocol):
         executed_at: datetime,
     ) -> None:
         """Record a triggered GTT's fill price and close its trade."""
+
+    def record_orders_checked(
+        self, order_ids: Sequence[int], checked_at: datetime
+    ) -> None:
+        """Stamp when pending orders were last polled against the broker."""
 
 
 class KiteOrderService(Protocol):
@@ -348,6 +354,14 @@ class TradeExecutionService:
             len(fetched_orders),
             len(pending),
         )
+        try:
+            self.repository.record_orders_checked(
+                [order.order_id for order in pending], current
+            )
+        except RepositoryError as error:
+            LOGGER.warning(
+                "Failed to record limit order check timestamps: %s", error
+            )
         broker_orders = {order.order_id: order for order in fetched_orders}
 
         local_time = current.astimezone(
@@ -525,6 +539,14 @@ class TradeExecutionService:
             len(fetched_orders),
             len(pending),
         )
+        try:
+            self.repository.record_orders_checked(
+                [pending_order.order_id for pending_order in pending], current
+            )
+        except RepositoryError as error:
+            LOGGER.warning(
+                "Failed to record GTT order check timestamps: %s", error
+            )
         gtts = {gtt.trigger_id: gtt for gtt in fetched_gtts}
         orders = {order.order_id: order for order in fetched_orders}
 

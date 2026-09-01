@@ -1,7 +1,7 @@
 """Database operations for saved assets and tracker membership."""
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
@@ -976,6 +976,28 @@ class AssetTrackerRepository:
             )
             raise RepositoryError(
                 "Unable to record the GTT order result."
+            ) from error
+
+    def record_orders_checked(
+        self, order_ids: Sequence[int], checked_at: datetime
+    ) -> None:
+        """Stamp when pending orders were last polled against the broker."""
+        if not order_ids:
+            return
+        try:
+            with self._connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE public.trade_order
+                    SET last_checked_at = %s
+                    WHERE order_id = ANY(%s)
+                    """,
+                    (checked_at, list(order_ids)),
+                )
+        except psycopg.Error as error:
+            LOGGER.exception("Failed to record order check timestamps")
+            raise RepositoryError(
+                "Unable to record order check timestamps."
             ) from error
 
     def _connection(self) -> Any:
